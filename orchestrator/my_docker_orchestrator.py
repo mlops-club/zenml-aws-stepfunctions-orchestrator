@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from docker.errors import ContainerError
 
+from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.config.base_settings import BaseSettings
 from zenml.config.global_config import GlobalConfiguration
 from zenml.constants import (
@@ -54,9 +55,7 @@ class LocalDockerOrchestrator(ContainerizedOrchestrator):
         Returns:
             A `StackValidator` instance.
         """
-        return StackValidator(
-            required_components={StackComponentType.IMAGE_BUILDER}
-        )
+        return StackValidator(required_components={StackComponentType.IMAGE_BUILDER})
 
     def get_orchestrator_run_id(self) -> str:
         """Returns the active orchestrator run id.
@@ -102,7 +101,6 @@ class LocalDockerOrchestrator(ContainerizedOrchestrator):
 
         docker_client = docker_utils._try_get_docker_client_from_env()
 
-        from zenml.entrypoints import StepEntrypointConfiguration
         entrypoint = StepEntrypointConfiguration.get_entrypoint_command()
 
         # Add the local stores path as a volume mount

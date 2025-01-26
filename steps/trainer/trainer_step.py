@@ -4,6 +4,7 @@ from sklearn.svm import SVC
 from typing_extensions import Annotated
 from zenml import step
 
+
 @step
 def trainer(
     X_train: np.ndarray,

@@ -12,9 +12,7 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 
-from pipelines import sklearn_pipeline
+from pipelines.sklearn_pipeline import sklearn_pipeline
 
 if __name__ == "__main__":
-    sklearn_pipeline.with_options(
-        config_path="configs/training_pipeline.yaml"
-    )()
+    sklearn_pipeline.with_options(config_path="configs/training_pipeline.yaml")()

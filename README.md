@@ -47,7 +47,7 @@ Then, you need to register the flavor of the orchestrator:
 
 ```shell
 # register the flavor of the orchestrator
-zenml orchestrator flavor register orchestrator.LocalDockerOrchestratorFlavor 
+zenml orchestrator flavor register orchestrator.my_docker_orchestrator_flavor.LocalDockerOrchestratorFlavor
 ```
 
 Then, you register your custom orchestrator using your registered flavor:
@@ -102,6 +102,71 @@ resources:
   cpu_count: 4
   memory: "4Gb"
 ```
+
+## Start developing the AWS Step Orchestrator
+
+Now that you have a working custom orchestrator, you can start developing the AWS Step Orchestrator.
+In principle, the process is the same. You need to create a new flavor, register it, then register the orchestrator, and
+finally register the stack with the orchestrator.
+
+However, there are some nuances that you need to be aware of:
+
+1. The AWS Step Orchestrator is a bit more complex than the Local Docker Orchestrator, as it requires a few more components to be set up. As the pipeline will run remotely, the stack needs to have an AWS artifact store and AWS container registry.
+2. Ideally, the AWS Step Orchestrator will require to set up a [AWS Service Connector](https://docs.zenml.io/how-to/infrastructure-deployment/auth-management/aws-service-connector) in order to authenticate your local machine to AWS services. This is totally optional, but it is a good practice to do so.
+
+Here is a simple example how you would set up a AWS Step Orchestrator:
+
+```shell
+# install the necessary integrations
+zenml integration install aws s3 -y
+```
+
+```shell
+# register the flavor
+zenml orchestrator flavor register orchestrator.my_aws_orchestrator_flavor.AWSStepOrchestratorFlavor
+```
+
+```shell
+# register the orchestrator
+zenml orchestrator register my_aws_orchestrator -f my_aws
+```
+
+```shell
+# Register a AWS Service Connector
+# Note: This will configure the connector to use the AWS profile you have set in your environment
+zenml service-connector register cloud_connector --type aws --auto-configure
+```
+
+```shell
+# Register the S3 artifact-store and connect it to the AWS Service Connector
+zenml artifact-store register cloud_artifact_store -f s3 --path=s3://bucket-name
+zenml artifact-store connect cloud_artifact_store --connector cloud_connector
+```
+
+```shell
+# Register the container registry and connect it to the AWS Service Connector
+zenml container-registry register cloud_container_registry -f aws --uri=<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com
+zenml container-registry connect cloud_container_registry --connector cloud_connector
+```
+
+```shell
+# register the stack
+zenml stack register my_aws_stack -o my_aws_orchestrator -a cloud_artifact_store -c cloud_container_registry
+```
+
+```shell
+# set the stack active
+zenml stack set my_aws_stack
+```
+
+Now you can run the pipeline by executing the following command:
+
+```shell
+# run the pipeline
+python run.py
+```
+
+And that's it! If you implemented the AWS Step Orchestrator correctly, the pipeline should run remotely in AWS on AWS Step Functions.
 
 ## 📚 Learn More
 

@@ -1,5 +1,6 @@
-from steps import digits_data_loader, evaluator, trainer
-
+from steps.evaluator.evaluator_step import evaluator
+from steps.importer.importer_step import digits_data_loader
+from steps.trainer.trainer_step import trainer
 from zenml import pipeline
 
 
