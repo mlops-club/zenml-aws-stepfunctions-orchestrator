@@ -140,9 +140,6 @@ __pycache__
 # all rst's
 *.rst
 
-# regression data
-!examples/regression/data/boston_data.csv
-
 # env variables
 *.env
 
@@ -151,19 +148,6 @@ __pycache__
 
 # pre-commit
 !*.pre-commit-config.yaml
-
-# scratchpad
-scratchpad/
-
-# zen
-*.csv
-temp/*
-local_test/
-.zen/
-!cloudbuild.yaml
-!cloudbuild-develop.yaml
-docs/book/_build/
-zenml_examples/
 
 # GitHub Folder YAML files not to be ignored
 !.github/ISSUE_TEMPLATE/**
@@ -174,26 +158,12 @@ zenml_examples/
 # pyenv local version file
 .python-version
 
-# wandb
-**wandb/
-!src/zenml/integrations/wandb
-
 # some examples have yamls; don't ignore them
 !examples/**/*.yaml
-
-# stack recipes
-test_terraform/
-
-# feast registry database
-examples/feast_feature_store/feast_feature_repo/data/registry.db
 
 #neptune
 *.neptune/
 
-#generated folder by zenml
-zenml_tutorial/
-
 .local/
-# PLEASE KEEP THIS LINE AT THE EOF: never include here src/zenml/zen_server/dashboard, since it is affecting release flow
 
 .zen

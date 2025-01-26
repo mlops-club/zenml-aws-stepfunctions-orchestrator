@@ -6,8 +6,6 @@ ZenML allows you to [create a custom orchestrator](https://docs.zenml.io/stack-c
 
 While ZenML comes built with standard integrations for well-known orchestrators like [Airflow](https://docs.zenml.io/stack-components/orchestrators/airflow), [Kubeflow](https://docs.zenml.io/stack-components/orchestrators/kubeflow), and even running [locally](https://docs.zenml.io/stack-components/orchestrators/local), your business might either want to orchestrate your ML workloads differently or slightly tweak the implementations of the standard orchestrators. In this case, this guide is useful, as it implements a relatively simple orchestrator.
 
-## 📚 Overview
-
 The `BaseOrchestrator` abstracts away many of the ZenML-specific details from the actual implementation and exposes a simplified interface. This example is an end-to-end guide on creating a custom orchestrator using ZenML. Click [here](https://docs.zenml.io/stack-components/orchestrators/custom) to learn more about the custom orchestrator interface.
 
 ## 💻 Tutorial: Creating a custom orchestrator that runs each step in a docker container
@@ -49,7 +47,7 @@ Then, you need to register the flavor of the orchestrator:
 
 ```shell
 # register the flavor of the orchestrator
-zenml orchestrator flavor register orchestrator.my_docker_orchestrator.MyDockerOrchestratorFlavor 
+zenml orchestrator flavor register orchestrator.LocalDockerOrchestratorFlavor 
 ```
 
 Then, you register your custom orchestrator using your registered flavor:
@@ -78,7 +76,7 @@ Finally, set the stack active. This means every pipeline that runs will use the 
 zenml stack set my_stack
 ```
 
-### 📝 Running a Pipeline and testing the Orchestrator
+### 📝 Running a Pipeline and Testing the Orchestrator
 
 This example ships with a simple pipeline that runs a `sklearn` pipeline. You can run it by executing the following command:
 

@@ -5,8 +5,6 @@ settings:
       - sklearn
     requirements:
       - pyarrow
-  orchestrator:
-    some_setting: "some_value"
 
 resources:
   cpu_count: 4
