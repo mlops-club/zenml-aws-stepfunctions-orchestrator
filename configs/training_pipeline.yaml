@@ -5,7 +5,9 @@ settings:
       - sklearn
     requirements:
       - pyarrow
-
+    # Have to include this for now
+    allow_download_from_artifact_store: false
+    allow_including_files_in_images: true
 resources:
   cpu_count: 4
   memory: "4Gb"
