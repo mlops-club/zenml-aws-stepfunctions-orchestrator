@@ -1,0 +1,13 @@
+# environment configuration
+settings:
+  docker:
+    required_integrations:
+      - sklearn
+    requirements:
+      - pyarrow
+  orchestrator:
+    some_setting: "some_value"
+
+resources:
+  cpu_count: 4
+  memory: "4Gb"
