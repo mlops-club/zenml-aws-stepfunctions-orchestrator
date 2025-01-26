@@ -1,4 +1,4 @@
-# environment configuration
+enable_cache: false
 settings:
   docker:
     required_integrations:
