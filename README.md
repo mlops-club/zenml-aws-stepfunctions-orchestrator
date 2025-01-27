@@ -114,59 +114,204 @@ However, there are some nuances that you need to be aware of:
 1. The AWS Step Orchestrator is a bit more complex than the Local Docker Orchestrator, as it requires a few more components to be set up. As the pipeline will run remotely, the stack needs to have an AWS artifact store and AWS container registry.
 2. Ideally, the AWS Step Orchestrator will require to set up a [AWS Service Connector](https://docs.zenml.io/how-to/infrastructure-deployment/auth-management/aws-service-connector) in order to authenticate your local machine to AWS services. This is totally optional, but it is a good practice to do so.
 
-Here is a simple example how you would set up a AWS Step Orchestrator:
+Before running pipelines, ensure you have:
+- An ECS cluster for running tasks
+- A task definition that can run your containers
+- An execution role with appropriate permissions
+- VPC with subnets and security groups
+- S3 bucket for artifacts
+- ECR repository for container images
 
-```shell
-# install the necessary integrations
+Here's a step-by-step guide on how to set up the AWS Step Orchestrator:
+
+#### 1. Install Required Integrations and Register the AWS Step Orchestrator Custom Flavor
+```bash
+# Install AWS-related ZenML integrations
 zenml integration install aws s3 -y
 ```
 
-```shell
-# register the flavor
-zenml orchestrator flavor register orchestrator.my_aws_orchestrator_flavor.AWSStepOrchestratorFlavor
+```bash
+# Register the AWS Step Orchestrator Custom Flavor
+zenml orchestrator flavor register orchestrator.my_aws_orchestrator_flavor.StepFunctionsOrchestratorFlavor
 ```
 
-```shell
-# register the orchestrator
-zenml orchestrator register my_aws_orchestrator -f my_aws
+### 2. Set up AWS Service Connector
+The AWS Service Connector helps authenticate with AWS services. You can set it up in multiple ways:
+
+```bash
+# Option 1: Auto-configure using your AWS CLI credentials
+zenml service-connector register aws_auto --type aws --auto-configure
+
+# Option 2: Configure with explicit credentials
+zenml service-connector register aws_explicit --type aws \
+    --auth-method secret-key \
+    --region=<YOUR_REGION> \
+    --access_key_id=<YOUR_ACCESS_KEY> \
+    --secret_access_key=<YOUR_SECRET_KEY>
+
+# Option 3: Configure with IAM role (recommended for production)
+zenml service-connector register aws_role --type aws \
+    --auth-method iam-role \
+    --region=<YOUR_REGION> \
+    --role_arn=<YOUR_ROLE_ARN> \
+    --access_key_id=<YOUR_ACCESS_KEY> \
+    --secret_access_key=<YOUR_SECRET_KEY>
 ```
 
-```shell
-# Register a AWS Service Connector
-# Note: This will configure the connector to use the AWS profile you have set in your environment
-zenml service-connector register cloud_connector --type aws --auto-configure
+The AWS Service Connector needs the following IAM permissions to work with Step Functions and ECS:
+
+#### Step Functions Permissions
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "states:CreateStateMachine",
+                "states:DeleteStateMachine",
+                "states:ListStateMachines",
+                "states:StartExecution",
+                "states:StopExecution",
+                "states:ListExecutions",
+                "states:DescribeExecution",
+                "states:DescribeStateMachine",
+                "states:GetExecutionHistory"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
 ```
 
-```shell
-# Register the S3 artifact-store and connect it to the AWS Service Connector
-zenml artifact-store register cloud_artifact_store -f s3 --path=s3://bucket-name
-zenml artifact-store connect cloud_artifact_store --connector cloud_connector
+#### ECS Permissions
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecs:RunTask",
+                "ecs:StopTask",
+                "ecs:DescribeTasks",
+                "ecs:ListTasks",
+                "ecs:DescribeTaskDefinition",
+                "iam:PassRole"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
 ```
 
-```shell
-# Register the container registry and connect it to the AWS Service Connector
-zenml container-registry register cloud_container_registry -f aws --uri=<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com
-zenml container-registry connect cloud_container_registry --connector cloud_connector
+#### Additional Required Permissions
+If you're using the full stack with S3 and ECR:
+
+- **S3 Permissions**:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::<YOUR_BUCKET>",
+                "arn:aws:s3:::<YOUR_BUCKET>/*"
+            ]
+        }
+    ]
+}
 ```
 
-```shell
-# register the stack
-zenml stack register my_aws_stack -o my_aws_orchestrator -a cloud_artifact_store -c cloud_container_registry
+- **ECR Permissions**:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:GetRepositoryPolicy",
+                "ecr:DescribeRepositories",
+                "ecr:ListImages",
+                "ecr:DescribeImages",
+                "ecr:BatchGetImage",
+                "ecr:InitiateLayerUpload",
+                "ecr:UploadLayerPart",
+                "ecr:CompleteLayerUpload",
+                "ecr:PutImage"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
 ```
 
-```shell
-# set the stack active
-zenml stack set my_aws_stack
+You can combine these permissions into a single IAM policy or create separate policies depending on your security requirements. For production environments, it's recommended to scope the `Resource` fields to specific ARNs rather than using `"*"`.
+
+
+#### 3. Register Required Stack Components
+
+```bash
+# Register S3 artifact store
+zenml artifact-store register s3_store \
+    -f s3 \
+    --path=s3://<YOUR_BUCKET_NAME> \
+    --connector aws_auto
+
+# Register ECR container registry
+zenml container-registry register ecr_registry \
+    -f aws \
+    --uri=<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com \
+    --connector aws_auto
+
+# Register AWS Step Functions orchestrator
+zenml orchestrator register step_functions_orchestrator \
+    -f aws_step_functions \
+    --ecs_cluster_arn=<YOUR_ECS_CLUSTER_ARN> \
+    --ecs_task_definition_arn=<YOUR_TASK_DEF_ARN> \
+    --execution_role=<YOUR_EXECUTION_ROLE_ARN> \
+    --subnet_ids='["subnet-xxx", "subnet-yyy"]' \
+    --security_group_ids='["sg-xxx"]' \
+    --account_id=<YOUR_AWS_ACCOUNT_ID> \
+    --region=<YOUR_AWS_REGION>
 ```
 
-Now you can run the pipeline by executing the following command:
+#### 4. Create and Set Active Stack
 
-```shell
-# run the pipeline
+```bash
+# Register a stack with all components
+zenml stack register aws_stack \
+    -o step_functions_orchestrator \
+    -a s3_store \
+    -c ecr_registry
+
+# Set the stack as active
+zenml stack set aws_stack
+```
+
+#### 5. Run a Pipeline
+
+```bash
+# Run your pipeline
 python run.py
 ```
 
-And that's it! If you implemented the AWS Step Orchestrator correctly, the pipeline should run remotely in AWS on AWS Step Functions.
+The pipeline will now execute using AWS Step Functions, with:
+- Steps running as ECS tasks
+- Artifacts stored in S3
+- Container images in ECR
+- Workflow managed by Step Functions
 
 ## 📚 Learn More
 
