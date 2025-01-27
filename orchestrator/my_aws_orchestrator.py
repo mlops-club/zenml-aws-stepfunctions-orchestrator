@@ -465,7 +465,6 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         Yields:
             A dictionary of metadata related to the pipeline run.
         """
-        # Metadata
         metadata: Dict[str, MetadataType] = {}
 
         # Orchestrator Run ID
@@ -495,15 +494,13 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
              the URL to the execution view in AWS Step Functions console.
         """
         try:
-            region_name, state_machine_name, execution_id = (
-                dissect_state_machine_execution_arn(execution.execution_arn)
+            region_name, _, _ = dissect_state_machine_execution_arn(
+                execution["executionArn"]
             )
-
             return (
                 f"https://{region_name}.console.aws.amazon.com/states/home"
-                f"?region={region_name}#/executions/details/{execution.execution_arn}"
+                f"?region={region_name}#/executions/details/{execution['executionArn']}"
             )
-
         except Exception as e:
             logger.warning(
                 f"There was an issue while extracting the execution url: {e}"
@@ -526,9 +523,8 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         """
         try:
             region_name, _, execution_id = dissect_state_machine_execution_arn(
-                execution.execution_arn
+                execution["executionArn"]
             )
-
             return (
                 f"https://{region_name}.console.aws.amazon.com/"
                 f"cloudwatch/home?region={region_name}#logsV2:log-groups/log-group"
@@ -551,8 +547,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
              the Execution ARN of the run in Step Functions.
         """
         try:
-            return str(execution.execution_arn)
-
+            return str(execution["executionArn"])
         except Exception as e:
             logger.warning(
                 f"There was an issue while extracting the execution run ID: {e}"
