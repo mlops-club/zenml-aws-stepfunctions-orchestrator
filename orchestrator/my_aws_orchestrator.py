@@ -212,6 +212,72 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 )
         return boto_session.client("stepfunctions")
 
+    def _create_or_update_task_definition(
+        self,
+        step_name: str,
+        image: str,
+        resource_settings: Optional["ResourceSettings"],
+        step_settings: "StepFunctionsOrchestratorSettings",
+    ) -> str:
+        """Dynamically create or update an ECS task definition.
+
+        Args:
+            step_name: Name of the step
+            image: Docker image to use
+            resource_settings: CPU/Memory requirements
+            step_settings: Step-specific settings
+
+        Returns:
+            Task definition ARN
+        """
+        # Initialize ECS client
+        ecs_client = self._get_ecs_client()
+
+        # Calculate CPU and memory
+        cpu = (
+            str(int(resource_settings.cpu_count * 1024))
+            if resource_settings and resource_settings.cpu_count
+            else "256"
+        )
+        memory = (
+            str(int(resource_settings.memory * 1024))
+            if resource_settings and resource_settings.memory
+            else "512"
+        )
+
+        # Create task definition
+        task_definition = {
+            "family": f"zenml-{step_name}",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": cpu,
+            "memory": memory,
+            "executionRoleArn": self.config.execution_role,
+            "taskRoleArn": self.config.task_role,  # Add this to config if not exists
+            "containerDefinitions": [
+                {
+                    "name": step_settings.container_name,
+                    "image": image,
+                    "essential": True,
+                    "logConfiguration": {
+                        "logDriver": "awslogs",
+                        "options": {
+                            "awslogs-group": f"/ecs/zenml-{step_name}",
+                            "awslogs-region": self.config.region,
+                            "awslogs-stream-prefix": "ecs",
+                            "awslogs-create-group": "true",
+                        },
+                    },
+                }
+            ],
+        }
+
+        try:
+            response = ecs_client.register_task_definition(**task_definition)
+            return response["taskDefinition"]["taskDefinitionArn"]
+        except Exception as e:
+            raise RuntimeError(f"Failed to register task definition: {str(e)}")
+
     def prepare_or_run_pipeline(
         self,
         deployment: "PipelineDeploymentResponse",
@@ -257,19 +323,25 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         steps = []
         for step_name, step in deployment.step_configurations.items():
             image = self.get_image(deployment=deployment, step_name=step_name)
-
             step_settings = cast(
                 StepFunctionsOrchestratorSettings, self.get_settings(step)
             )
 
-            # Create ECS task definition for this step
+            # Dynamically create task definition for this step
+            task_definition_arn = self._create_or_update_task_definition(
+                step_name=step_name,
+                image=image,
+                resource_settings=step.config.resource_settings,
+                step_settings=step_settings,
+            )
+
             step_definition = {
                 "Type": "Task",
                 "Resource": "arn:aws:states:::ecs:runTask.sync",
                 "Parameters": {
                     "LaunchType": "FARGATE",
                     "Cluster": self.config.ecs_cluster_arn,
-                    "TaskDefinition": self.config.ecs_task_definition_arn,
+                    "TaskDefinition": task_definition_arn,  # Use dynamic task definition
                     "NetworkConfiguration": {
                         "AwsvpcConfiguration": {
                             "Subnets": self.config.subnet_ids,
@@ -283,7 +355,6 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                         "ContainerOverrides": [
                             {
                                 "Name": step_settings.container_name,
-                                "Image": image,
                                 "Environment": [
                                     {"Name": key, "Value": value}
                                     for key, value in environment.items()
@@ -299,10 +370,17 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 "ResultPath": None,
                 "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "Failed"}],
             }
-            self._configure_task_resources(
-                step_definition=step_definition,
-                resource_settings=step.config.resource_settings,
-            )
+
+            # Log warning if GPU requested (not supported in Fargate)
+            if (
+                step.config.resource_settings
+                and step.config.resource_settings.gpu_count
+            ):
+                logger.warning(
+                    "GPU configuration is not supported in ECS Fargate. "
+                    "To use GPUs, consider using AWS Batch or SageMaker instead."
+                )
+
             steps.append({step_name: step_definition})
 
         # Add final success and failure states

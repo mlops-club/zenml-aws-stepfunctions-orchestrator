@@ -198,6 +198,12 @@ The AWS Service Connector needs the following IAM permissions to work with Step 
                 "ecs:ListTasks",
                 "ecs:DescribeTaskDefinition",
                 "iam:PassRole"
+                "ecs:RegisterTaskDefinition",
+                "ecs:DeregisterTaskDefinition",
+                "ecs:ListTaskDefinitions",
+                "logs:CreateLogGroup",
+                "logs:PutLogEvents",
+                "logs:CreateLogStream"
             ],
             "Resource": "*"
         }
