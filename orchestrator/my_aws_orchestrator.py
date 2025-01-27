@@ -14,8 +14,10 @@ from typing import (
     Tuple,
     Type,
     cast,
+    List,
 )
 from uuid import UUID
+from collections import OrderedDict
 
 import boto3
 
@@ -87,6 +89,56 @@ def dissect_state_machine_execution_arn(
     execution_id = execution_match.group(1) if execution_match else None
 
     return region_name, state_machine_name, execution_id
+
+
+def build_dag_levels(deployment: "PipelineDeploymentResponse") -> List[List[str]]:
+    """Returns a list of lists, representing 'levels' of a DAG:
+    Each sub-list contains the step names that can safely run in parallel.
+    """
+    # Build adjacency list: step -> upstream steps
+    step_to_upstreams = {}
+    all_steps = list(deployment.step_configurations.keys())
+    for step_name, step_config in deployment.step_configurations.items():
+        step_to_upstreams[step_name] = step_config.spec.upstream_steps or []
+
+    # Track in-degrees (how many prerequisites each step has)
+    in_degree = {s: 0 for s in all_steps}
+    for s, upstreams in step_to_upstreams.items():
+        for us in upstreams:
+            in_degree[s] = in_degree[s] + 1
+
+    # Initialize queue with root steps (in-degree = 0)
+    from collections import deque
+
+    queue = deque([s for s in all_steps if in_degree[s] == 0])
+    levels = []
+    visited = set()
+
+    while queue:
+        # All steps in the queue can run in parallel
+        current_level = list(queue)
+        levels.append(current_level)
+
+        # Prepare for next level
+        next_queue = []
+        for step in current_level:
+            visited.add(step)
+        while current_level:
+            step = current_level.pop()
+            # Decrease in-degree of steps that depend on "step"
+            for candidate in all_steps:
+                if step in step_to_upstreams[candidate]:
+                    in_degree[candidate] -= 1
+                    if in_degree[candidate] == 0:
+                        next_queue.append(candidate)
+
+        queue = deque(next_queue)
+
+    # If visited < all_steps, there's a cycle or some error, handle accordingly
+    if len(visited) < len(all_steps):
+        raise RuntimeError("Cycle detected in pipeline steps or missing references.")
+
+    return levels
 
 
 class StepFunctionsOrchestrator(ContainerizedOrchestrator):
@@ -312,185 +364,192 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 "and the pipeline will be run immediately."
             )
 
-        # Step Functions requires state machine name to use alphanum and hyphens only
-        unsanitized_orchestrator_run_name = get_orchestrator_run_name(
-            pipeline_name=deployment.pipeline_configuration.name
-        )
-        # replace all non-alphanum and non-hyphens with hyphens
-        state_machine_name = re.sub(
-            r"[^a-zA-Z0-9\-]", "-", unsanitized_orchestrator_run_name
-        )
-
-        # Initialize Step Functions client
-        sfn_client = self._get_step_functions_client()
-
-        # Add run ID to environment variables
-        environment[ENV_ZENML_STEP_FUNCTIONS_RUN_ID] = (
-            "${execution_id}"  # This will be replaced by Step Functions
-        )
-
-        # Get pipeline name for tagging
+        # 1. Gather pipeline info
         pipeline_name = deployment.pipeline_configuration.name
+        orchestrator_run_name = f"zenml-{pipeline_name}-{uuid.uuid4().hex[:8]}"
+        state_machine_name = re.sub(r"[^a-zA-Z0-9\-]", "-", orchestrator_run_name)
 
-        # Create state machine definition
-        steps = []
-        for step_name, step in deployment.step_configurations.items():
-            image = self.get_image(deployment=deployment, step_name=step_name)
-            step_settings = cast(
-                StepFunctionsOrchestratorSettings, self.get_settings(step)
-            )
+        # 2. Build DAG levels
+        levels = build_dag_levels(deployment)  # from snippet above
 
-            # Dynamically create task definition for this step
-            task_definition_arn = self._create_or_update_task_definition(
+        # 3. Create ECS task definitions and store them for referencing
+        step_task_defs = {}
+        for step_name, step_config in deployment.step_configurations.items():
+            tf_arn = self._create_or_update_task_definition(
                 step_name=step_name,
-                image=image,
-                resource_settings=step.config.resource_settings,
-                step_settings=step_settings,
+                image=self.get_image(deployment, step_name),
+                resource_settings=step_config.config.resource_settings,
+                step_settings=cast(
+                    StepFunctionsOrchestratorSettings, self.get_settings(step_config)
+                ),
                 pipeline_name=pipeline_name,
             )
+            step_task_defs[step_name] = tf_arn
 
-            step_definition = {
-                "Type": "Task",
-                "Resource": "arn:aws:states:::ecs:runTask.sync",
-                "Parameters": {
-                    "LaunchType": "FARGATE",
-                    "Cluster": self.config.ecs_cluster_arn,
-                    "TaskDefinition": task_definition_arn,
-                    "NetworkConfiguration": {
-                        "AwsvpcConfiguration": {
-                            "Subnets": self.config.subnet_ids,
-                            "SecurityGroups": self.config.security_group_ids,
-                            "AssignPublicIp": "ENABLED"
-                            if step_settings.assign_public_ip
-                            else "DISABLED",
-                        }
-                    },
-                    "Overrides": {
-                        "ContainerOverrides": [
-                            {
-                                "Name": step_settings.container_name,
-                                "Environment": [
-                                    {"Name": key, "Value": value}
-                                    for key, value in environment.items()
-                                ],
-                            }
-                        ]
-                    },
-                    # Add tags to ECS tasks
-                    "Tags": [
-                        {"key": "zenml.pipeline_name", "value": pipeline_name},
-                        {"key": "zenml.step_name", "value": step_name},
-                        {"key": "zenml.orchestrator", "value": "step_functions"},
-                        {"key": "zenml.resource_type", "value": "ecs_task"},
-                        *[
-                            {"key": k, "value": v}
-                            for k, v in step_settings.tags.items()
-                        ],
-                    ],
-                },
-                "TimeoutSeconds": step_settings.max_runtime_in_seconds,
-                "Next": step.spec.upstream_steps[0]
-                if step.spec.upstream_steps
-                else "Success",
-                "ResultPath": None,
-                "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "Failed"}],
-            }
+        # 4. Build Step Functions States
+        # We'll build a chain of {Parallel -> Parallel -> ... -> Success}.
+        # Each Parallel state's "Branches" is the set of steps that can run at that level.
+        state_name_sequence = []
+        states = OrderedDict()
 
-            # Log warning if GPU requested (not supported in Fargate)
-            if (
-                step.config.resource_settings
-                and step.config.resource_settings.gpu_count
-            ):
-                logger.warning(
-                    "GPU configuration is not supported in ECS Fargate. "
-                    "To use GPUs, consider using AWS Batch or SageMaker instead."
+        # Keep track of how many levels and a naming pattern
+        for idx, level_steps in enumerate(levels):
+            parallel_state_name = f"Level_{idx}"
+            state_name_sequence.append(parallel_state_name)
+
+            branches = []
+            for step_name in level_steps:
+                step_settings = cast(
+                    StepFunctionsOrchestratorSettings,
+                    self.get_settings(deployment.step_configurations[step_name]),
                 )
 
-            steps.append({step_name: step_definition})
+                # Single-state chain for a "branch" in this simpler approach
+                branch_states = {
+                    "StartAt": step_name,
+                    "States": {
+                        step_name: {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::ecs:runTask.sync",
+                            "Parameters": {
+                                "LaunchType": "FARGATE",
+                                "Cluster": self.config.ecs_cluster_arn,
+                                "TaskDefinition": step_task_defs[step_name],
+                                "NetworkConfiguration": {
+                                    "AwsvpcConfiguration": {
+                                        "Subnets": self.config.subnet_ids,
+                                        "SecurityGroups": self.config.security_group_ids,
+                                        "AssignPublicIp": "ENABLED"
+                                        if step_settings.assign_public_ip
+                                        else "DISABLED",
+                                    }
+                                },
+                                "Overrides": {
+                                    "ContainerOverrides": [
+                                        {
+                                            "Name": step_settings.container_name,
+                                            "Environment": [
+                                                {"Name": k, "Value": v}
+                                                for k, v in environment.items()
+                                            ],
+                                        }
+                                    ]
+                                },
+                                "Tags": [
+                                    {
+                                        "key": "zenml.pipeline_name",
+                                        "value": pipeline_name,
+                                    },
+                                    {"key": "zenml.step_name", "value": step_name},
+                                    {"key": "zenml.resource_type", "value": "ecs_task"},
+                                    *[
+                                        {"key": k, "value": v}
+                                        for k, v in step_settings.tags.items()
+                                    ],
+                                ],
+                            },
+                            "TimeoutSeconds": step_settings.max_runtime_in_seconds,
+                            "Catch": [
+                                {"ErrorEquals": ["States.ALL"], "Next": "Failed"}
+                            ],
+                            "End": True,
+                        }
+                    },
+                }
+                branches.append(branch_states)
 
-        # Add final success and failure states
-        steps.extend(
-            [
-                {"Success": {"Type": "Succeed"}},
-                {
-                    "Failed": {
-                        "Type": "Fail",
-                        "Error": "StepFailed",
-                        "Cause": "A step in the pipeline failed",
-                    }
-                },
-            ]
-        )
+            # The parallel state that runs all steps in this level
+            states[parallel_state_name] = {
+                "Type": "Parallel",
+                "Branches": branches,
+                "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "Failed"}],
+            }
+            # We'll link them in a chain after building them
 
-        # Create state machine definition
+        # 5. Insert "Failed" and "Success" states
+        states["Failed"] = {
+            "Type": "Fail",
+            "Error": "StepFailed",
+            "Cause": "A step in the pipeline failed",
+        }
+        states["Success"] = {"Type": "Succeed"}
+
+        # 6. Link each parallel state to the next in sequence
+        for i, state_name in enumerate(state_name_sequence):
+            if i < len(state_name_sequence) - 1:
+                # Next is the next parallel state
+                next_state_name = state_name_sequence[i + 1]
+                states[state_name]["Next"] = next_state_name
+            else:
+                # The last parallel state goes to "Success"
+                states[state_name]["Next"] = "Success"
+
+        # 7. Final state machine definition
         state_machine_definition = {
-            "Comment": f"ZenML pipeline: {deployment.pipeline_configuration.name}",
-            "StartAt": list(deployment.step_configurations.keys())[0],
-            "States": {k: v for d in steps for k, v in d.items()},
+            "Comment": f"ZenML pipeline: {pipeline_name}",
+            # Start at the first "Level_0" or fail if there's no levels
+            "StartAt": state_name_sequence[0] if state_name_sequence else "Success",
+            "States": states,
         }
 
-        settings = cast(
-            StepFunctionsOrchestratorSettings, self.get_settings(deployment)
-        )
-
-        # Create/update state machine
+        # 8. Create or update the State Machine
+        sfn_client = self._get_step_functions_client()
         try:
             response = sfn_client.create_state_machine(
                 name=state_machine_name,
                 definition=json.dumps(state_machine_definition),
                 roleArn=self.config.execution_role,
-                type=settings.state_machine_type,
+                type=cast(
+                    StepFunctionsOrchestratorSettings, self.get_settings(deployment)
+                ).state_machine_type,
                 tags=[
                     {"key": "zenml.pipeline_name", "value": pipeline_name},
                     {"key": "zenml.orchestrator", "value": "step_functions"},
-                    {"key": "zenml.resource_type", "value": "state_machine"},
-                    *[{"key": k, "value": v} for k, v in settings.tags.items()],
                 ],
             )
             state_machine_arn = response["stateMachineArn"]
         except sfn_client.exceptions.StateMachineAlreadyExists:
-            # Update existing state machine
+            # If it exists, update
             state_machine_arn = f"arn:aws:states:{self.config.region}:{self.config.account_id}:stateMachine:{state_machine_name}"
-            response = sfn_client.update_state_machine(
+            sfn_client.update_state_machine(
                 stateMachineArn=state_machine_arn,
                 definition=json.dumps(state_machine_definition),
                 roleArn=self.config.execution_role,
             )
 
-        # Start execution
+        # 9. Start the execution
         execution = sfn_client.start_execution(
             stateMachineArn=state_machine_arn,
             name=f"{state_machine_name}-{uuid.uuid4()}",
         )
 
-        # Yield metadata based on the execution
-        yield from self.compute_metadata(execution=execution, settings=settings)
+        # 10. Yield metadata
+        yield from self.compute_metadata(
+            execution=execution,
+            settings=cast(
+                StepFunctionsOrchestratorSettings, self.get_settings(deployment)
+            ),
+        )
 
-        # Wait for completion if synchronous execution is requested
-        if settings.synchronous:
-            logger.info(
-                "Executing synchronously. Waiting for state machine to finish... \n"
-                "At this point you can `Ctrl-C` out without cancelling the "
-                "execution."
-            )
-            try:
-                while True:
-                    status = sfn_client.describe_execution(
-                        executionArn=execution["executionArn"]
-                    )["status"]
-                    if status in ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"]:
-                        break
-                    time.sleep(POLLING_DELAY)
+        # 11. Optionally wait if synchronous
+        orchestrator_settings = cast(
+            StepFunctionsOrchestratorSettings, self.get_settings(deployment)
+        )
+        if orchestrator_settings.synchronous:
+            logger.info("Running synchronously. Waiting for completion...")
+            while True:
+                status = sfn_client.describe_execution(
+                    executionArn=execution["executionArn"]
+                )["status"]
+                if status in ("SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"):
+                    break
+                time.sleep(30)
 
-                if status == "SUCCEEDED":
-                    logger.info("Pipeline completed successfully.")
-                else:
-                    raise RuntimeError(f"Pipeline failed with status: {status}")
-
-            except Exception as e:
+            if status != "SUCCEEDED":
                 raise RuntimeError(
-                    f"Error while waiting for pipeline execution: {str(e)}"
+                    f"Step Functions pipeline failed with status: {status}"
                 )
+            logger.info("Pipeline completed successfully!")
 
     def get_pipeline_run_metadata(self, run_id: UUID) -> Dict[str, "MetadataType"]:
         """Get general component-specific metadata for a pipeline run.
