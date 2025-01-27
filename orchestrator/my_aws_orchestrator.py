@@ -3,7 +3,8 @@
 import hashlib
 import os
 import json
-import uuid
+import random
+import string
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -17,9 +18,7 @@ from typing import (
 )
 
 from collections import deque
-from typing import List, Dict, Set
 from zenml.models import PipelineDeploymentResponse
-from uuid import UUID
 from botocore.exceptions import ClientError
 
 import boto3
@@ -51,74 +50,51 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 ENV_ZENML_STEP_FUNCTIONS_RUN_ID = "ZENML_STEP_FUNCTIONS_RUN_ID"
-MAX_POLLING_ATTEMPTS = 100
-POLLING_DELAY = 30
+MAX_TASK_DEFINITION_VERSIONS = 5
+VALID_FARGATE_CPU = {256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536}
+VALID_FARGATE_MEMORY = {
+    512: {1024, 2048, 3072, 4096},
+    1024: set(range(2048, 8193, 1024)),
+    2048: set(range(4096, 16385, 1024)),
+    4096: set(range(8192, 30720, 1024)),
+    8192: set(range(16384, 61440, 1024)),
+    16384: set(range(32768, 122880, 1024)),
+    32768: set(range(65536, 122880, 1024)),
+    65536: set(range(131072, 237568, 1024)),
+}
+
+
+def _generate_random_string(length: int) -> str:
+    """Generate a random string of specified length."""
+    return "".join(random.choices(string.ascii_letters + string.digits, k=length))
 
 
 def build_dag_levels(deployment: PipelineDeploymentResponse) -> List[List[str]]:
-    """Calculate parallel execution levels for a pipeline DAG.
-
-    Args:
-        deployment: The pipeline deployment configuration
-
-    Returns:
-        List of execution levels where each level contains step names
-        that can execute in parallel
-
-    Raises:
-        RuntimeError: If a cycle is detected in the dependency graph
-    """
-    # Build dependency graph and reverse dependency graph
-    step_dependencies: Dict[str, Set[str]] = {}
-    reverse_dependencies: Dict[str, Set[str]] = {}
-    all_steps = set(deployment.step_configurations.keys())
-
-    for step_name, step_config in deployment.step_configurations.items():
-        dependencies = set(step_config.spec.upstream_steps)
-        step_dependencies[step_name] = dependencies
-
-        for dep in dependencies:
-            reverse_dependencies.setdefault(dep, set()).add(step_name)
-
-    # Initialize in-degree map and queue
-    in_degree: Dict[str, int] = {
-        step: len(deps) for step, deps in step_dependencies.items()
+    step_dependencies = {
+        step_name: set(step_config.spec.upstream_steps)
+        for step_name, step_config in deployment.step_configurations.items()
     }
 
-    # Use deque for efficient pops from front
-    queue = deque(step for step, count in in_degree.items() if count == 0)
-    levels: List[List[str]] = []
-    visited: Set[str] = set()
+    in_degree = {step: len(deps) for step, deps in step_dependencies.items()}
+    queue = deque([step for step, count in in_degree.items() if count == 0])
+    levels = []
 
     while queue:
-        level_size = len(queue)
-        current_level: List[str] = []
-
-        # Process all nodes at current level
-        for _ in range(level_size):
+        level = []
+        for _ in range(len(queue)):
             step = queue.popleft()
-            if step in visited:
-                continue
+            level.append(step)
 
-            current_level.append(step)
-            visited.add(step)
+            for dependent in step_dependencies:
+                if step in step_dependencies[dependent]:
+                    in_degree[dependent] -= 1
+                    if in_degree[dependent] == 0:
+                        queue.append(dependent)
 
-            # Update dependencies using reverse graph
-            for dependent in reverse_dependencies.get(step, set()):
-                in_degree[dependent] -= 1
-                if in_degree[dependent] == 0:
-                    queue.append(dependent)
+        levels.append(level)
 
-        if current_level:
-            levels.append(current_level)
-
-    # Check for cycles
-    if len(visited) != len(all_steps):
-        unvisited = all_steps - visited
-        raise RuntimeError(
-            f"Pipeline contains cycles or invalid dependencies. "
-            f"Unprocessable steps: {', '.join(unvisited)}"
-        )
+    if sum(len(level) for level in levels) != len(deployment.step_configurations):
+        raise RuntimeError("Pipeline contains cycles or invalid dependencies")
 
     return levels
 
@@ -252,326 +228,203 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         stack: "Stack",
         environment: Dict[str, str],
     ) -> Iterator[Dict[str, MetadataType]]:
-        """Execute pipeline using AWS Step Functions with proper DAG handling"""
+        sfn = self._get_step_functions_client()
+        ecs = self._get_ecs_client()
+        state_machine_arn = None
+
         try:
-            # Validate AWS permissions and network configuration
             self._validate_aws_configuration()
-
-            # Setup pipeline metadata
             pipeline_name = deployment.pipeline_configuration.name
-            state_machine_name = f"zenml-{pipeline_name}-{uuid.uuid4().hex[:6]}"
+            state_machine_name = (
+                f"zenml-{pipeline_name}-{self._generate_random_string(6)}"
+            )
+            execution_id = f"zenml-{_generate_random_string(8)}"
+            environment[ENV_ZENML_STEP_FUNCTIONS_RUN_ID] = execution_id
 
-            # Create optimized task definitions
-            task_definitions = self._create_task_definitions(deployment, pipeline_name)
-
-            # Build state machine from DAG structure
+            task_definitions = self._create_task_definitions(
+                deployment, environment, ecs
+            )
             state_machine_definition = self._build_state_machine_definition(
-                deployment, task_definitions, environment
+                deployment, task_definitions
             )
 
-            # Deploy and execute state machine
-            execution_arn = self._deploy_and_execute(
-                state_machine_name, state_machine_definition, deployment
+            state_machine_arn = self._deploy_state_machine(
+                sfn, state_machine_name, state_machine_definition
             )
+            execution_arn = self._start_execution(sfn, state_machine_arn, execution_id)
 
-            # Yield metadata with proper execution context
-            yield from self._generate_execution_metadata(execution_arn)
+            yield from self._generate_execution_metadata(
+                execution_arn, task_definitions
+            )
 
         except ClientError as e:
             logger.error(f"AWS API Error: {e.response['Error']['Message']}")
-            raise RuntimeError(
-                "Failed to execute pipeline on AWS Step Functions"
-            ) from e
+            raise RuntimeError("Pipeline execution failed") from e
+        finally:
+            if state_machine_arn:
+                self._cleanup_resources(sfn, ecs, state_machine_arn, task_definitions)
 
     def _validate_aws_configuration(self):
-        """Pre-flight checks for AWS configuration"""
-        self._validate_iam_roles()
+        self._validate_iam_permissions()
         self._validate_network_configuration()
 
-    def _validate_iam_roles(self):
-        """Verify required IAM permissions exist"""
-        iam = self._get_iam_client()
-
-        required_permissions = [
+    def _validate_iam_permissions(self):
+        iam = boto3.client("iam")
+        required_actions = [
             "states:CreateStateMachine",
             "states:StartExecution",
             "ecs:RunTask",
             "ecs:DescribeTasks",
             "logs:CreateLogGroup",
-            "logs:CreateLogStream",
             "logs:PutLogEvents",
         ]
 
         for role_arn in [self.config.execution_role, self.config.task_role]:
-            try:
-                policy = iam.get_role_policy(
-                    RoleName=role_arn.split("/")[-1],
-                    PolicyName="AmazonECSTaskExecutionRolePolicy",
+            response = iam.simulate_principal_policy(
+                PolicySourceArn=role_arn,
+                ActionNames=required_actions,
+                ResourceArns=["*"],
+            )
+            denied = [
+                result["EvalActionName"]
+                for result in response["EvaluationResults"]
+                if result["EvalDecision"] != "allowed"
+            ]
+            if denied:
+                raise RuntimeError(
+                    f"Role {role_arn} missing permissions: {', '.join(denied)}"
                 )
-                if not all(
-                    perm in policy["PolicyDocument"] for perm in required_permissions
-                ):
-                    raise RuntimeError(
-                        f"IAM role {role_arn} missing required permissions"
-                    )
-            except iam.exceptions.NoSuchEntityException:
-                raise RuntimeError(f"IAM role {role_arn} not found or inaccessible")
 
     def _validate_network_configuration(self):
-        """Validate subnet and security group configuration"""
-        ec2 = self._get_ec2_client()
-
+        ec2 = boto3.client("ec2")
         try:
-            subnet_info = ec2.describe_subnets(SubnetIds=self.config.subnet_ids)
-            for subnet in subnet_info["Subnets"]:
-                if not subnet["MapPublicIpOnLaunch"] and self.config.assign_public_ip:
-                    logger.warning(
-                        "Public IP assignment requested but subnet %s is private",
-                        subnet["SubnetId"],
-                    )
+            ec2.describe_subnets(SubnetIds=self.config.subnet_ids)
+            ec2.describe_security_groups(GroupIds=self.config.security_group_ids)
         except ClientError as e:
-            raise RuntimeError(f"Invalid subnet configuration: {e}")
+            raise RuntimeError(f"Invalid network configuration: {e}")
 
     def _create_task_definitions(
-        self, deployment: "PipelineDeploymentResponse", pipeline_name: str
+        self,
+        deployment: "PipelineDeploymentResponse",
+        environment: Dict[str, str],
+        ecs: boto3.client,
     ) -> Dict[str, str]:
-        """Create or reuse ECS task definitions with hashing"""
         task_defs = {}
-
         for step_name, step_config in deployment.step_configurations.items():
-            config_hash = self._hash_step_configuration(step_config)
+            config_hash = self._hash_step_config(step_config, environment)
             family_name = f"zenml-{step_name}-{config_hash[:8]}"
 
+            self._cleanup_old_task_definitions(ecs, family_name)
+
             try:
-                existing_def = self._get_existing_task_definition(family_name)
-                if existing_def:
-                    task_defs[step_name] = existing_def
-                    continue
+                task_def_arn = self._get_existing_task_definition(ecs, family_name)
             except ClientError:
-                pass
+                task_def_arn = self._register_task_definition(
+                    ecs, family_name, step_config, environment
+                )
 
-            # Create new task definition
-            task_def_arn = self._register_new_task_definition(
-                step_name, step_config, pipeline_name, family_name
-            )
             task_defs[step_name] = task_def_arn
-
         return task_defs
 
-    def _hash_step_configuration(self, step_config) -> str:
-        """Generate hash of step configuration for reuse checking"""
-        hash_data = {
-            "image": self.get_image(step_config),
-            "cpu": step_config.config.resource_settings.cpu_count,
-            "memory": step_config.config.resource_settings.memory,
-            "gpu": step_config.config.resource_settings.gpu_count,
-        }
-        return hashlib.sha256(json.dumps(hash_data).encode()).hexdigest()
+    def _hash_step_config(self, step_config, environment: Dict[str, str]) -> str:
+        resource = step_config.config.resource_settings or ResourceSettings()
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "image": self.get_image(step_config).dict(),
+                    "env": sorted(environment.items()),
+                    "command": step_config.spec.command,
+                    "cpu": resource.cpu_count,
+                    "memory": resource.memory,
+                    "gpu": resource.gpu_count,
+                    "gpu_type": resource.gpu_type,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
 
-    def _register_new_task_definition(
+    def _cleanup_old_task_definitions(self, ecs: boto3.client, family_name: str):
+        try:
+            versions = ecs.list_task_definitions(
+                family_prefix=family_name, sort="DESC"
+            )["taskDefinitionArns"]
+            for arn in versions[MAX_TASK_DEFINITION_VERSIONS:]:
+                ecs.deregister_task_definition(taskDefinition=arn)
+        except ClientError as e:
+            logger.warning(f"Failed to clean up task definitions: {e}")
+
+    def _register_task_definition(
         self,
-        step_name: str,
-        step_config: Any,
-        pipeline_name: str,
+        ecs: boto3.client,
         family_name: str,
+        step_config,
+        environment: Dict[str, str],
     ) -> str:
-        """Create new ECS task definition with resource settings."""
-        ecs = self._get_ecs_client()
-        resource_settings = step_config.config.resource_settings or ResourceSettings()
+        resource = step_config.config.resource_settings or ResourceSettings()
+        self._validate_fargate_resources(resource)
 
-        # Convert ZenML resource settings to ECS units
-        cpu = (
-            str(int(resource_settings.cpu_count * 1024))
-            if resource_settings.cpu_count
-            else "1024"
-        )
-        memory = (
-            str(int(resource_settings.memory)) if resource_settings.memory else "2048"
-        )  # AWS uses MB
-
-        task_definition = {
-            "family": family_name,
-            "networkMode": "awsvpc",
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": cpu,
-            "memory": memory,
-            "executionRoleArn": self.config.execution_role,
-            "taskRoleArn": self.config.task_role,
-            "containerDefinitions": [
+        response = ecs.register_task_definition(
+            family=family_name,
+            networkMode="awsvpc",
+            requiresCompatibilities=["FARGATE"],
+            cpu=str(resource.cpu_count),
+            memory=str(resource.memory),
+            executionRoleArn=self.config.execution_role,
+            taskRoleArn=self.config.task_role,
+            containerDefinitions=[
                 {
                     "name": "zenml-container",
                     "image": self.get_image(step_config),
-                    "essential": True,
+                    "command": step_config.spec.command,
+                    "environment": [
+                        {"name": k, "value": v} for k, v in environment.items()
+                    ],
                     "logConfiguration": {
                         "logDriver": "awslogs",
                         "options": {
                             "awslogs-group": f"/ecs/{family_name}",
                             "awslogs-region": self.config.region,
                             "awslogs-stream-prefix": "zenml",
-                            "awslogs-create-group": "true",
                         },
                     },
-                    # Add resource limits
-                    "cpu": int(resource_settings.cpu_count)
-                    if resource_settings.cpu_count
-                    else 1024,
-                    "memoryReservation": int(resource_settings.memory)
-                    if resource_settings.memory
-                    else 2048,
                 }
             ],
-            "tags": [
-                {"key": "zenml-pipeline", "value": pipeline_name},
-                {"key": "zenml-step", "value": step_name},
-            ],
-        }
+        )
+        return response["taskDefinition"]["taskDefinitionArn"]
 
-        # Handle GPU settings
-        if resource_settings.gpu_count and resource_settings.gpu_count > 0:
-            task_definition["runtimePlatform"] = {
-                "cpuArchitecture": "ARM64",
-                "operatingSystemFamily": "LINUX",
-            }
-            task_definition["containerDefinitions"][0]["resourceRequirements"] = [
-                {"type": "GPU", "value": str(resource_settings.gpu_count)}
-            ]
-
-        try:
-            response = ecs.register_task_definition(**task_definition)
-            return response["taskDefinition"]["taskDefinitionArn"]
-        except ClientError as e:
-            logger.error(f"Failed to register task definition: {e}")
-            raise RuntimeError("Task definition registration failed") from e
-
-    def _hash_step_configuration(self, step_config) -> str:
-        """Generate hash incorporating resource settings."""
-        resource_settings = step_config.config.resource_settings or ResourceSettings()
-
-        hash_data = {
-            "image": self.get_image(step_config),
-            "cpu": resource_settings.cpu_count,
-            "memory": resource_settings.memory,
-            "gpu": resource_settings.gpu_count,
-            "gpu_type": resource_settings.gpu_type,
-        }
-        return hashlib.sha256(
-            json.dumps(hash_data, sort_keys=True).encode()
-        ).hexdigest()
+    def _validate_fargate_resources(self, settings: ResourceSettings):
+        if settings.cpu_count not in VALID_FARGATE_CPU:
+            raise ValueError(
+                f"Invalid CPU value {settings.cpu_count}. Valid values: {VALID_FARGATE_CPU}"
+            )
+        if settings.memory not in VALID_FARGATE_MEMORY.get(settings.cpu_count, set()):
+            raise ValueError(
+                f"Memory {settings.memory}MB invalid for {settings.cpu_count} CPU units"
+            )
 
     def _build_state_machine_definition(
         self,
         deployment: "PipelineDeploymentResponse",
         task_definitions: Dict[str, str],
-        environment: Dict[str, str],
     ) -> Dict[str, Any]:
-        """Construct state machine with resource-aware steps."""
-        # Existing implementation remains the same, but ensure resource settings
-        # are passed to step state creation
         dag_levels = build_dag_levels(deployment)
-        states = {
-            "Start": {"Type": "Pass", "Next": "PipelineFlow"},
-            "PipelineFlow": {"Type": "Parallel", "Branches": []},
-            "Success": {"Type": "Succeed"},
-            "Failed": {"Type": "Fail", "Error": "ExecutionFailed"},
-        }
+        states = {"Start": {"Type": "Pass", "Next": "Level_0"}}
 
         for level_num, level in enumerate(dag_levels):
-            branch = {
-                "StartAt": f"Level_{level_num}_Start",
-                "States": self._build_level_states(
-                    level,
-                    task_definitions,
-                    environment,
-                    level_num,
-                    deployment,  # Pass deployment to access resource settings
-                ),
-            }
-            states["PipelineFlow"]["Branches"].append(branch)
-
-        return {
-            "Comment": f"ZenML Pipeline: {deployment.pipeline_configuration.name}",
-            "StartAt": "Start",
-            "States": states,
-        }
-
-    def _build_level_states(
-        self,
-        level: List[str],
-        task_definitions: Dict[str, str],
-        environment: Dict[str, str],
-        level_num: int,
-        deployment: "PipelineDeploymentResponse",
-    ) -> Dict[str, Any]:
-        """Create states with resource settings."""
-        states = {}
-        for step_name in level:
-            step_config = deployment.step_configurations[step_name]
-            resource_settings = (
-                step_config.config.resource_settings or ResourceSettings()
-            )
-
-            states.update(
-                self._create_step_state(
-                    step_name,
-                    task_definitions[step_name],
-                    environment,
-                    resource_settings,
-                )
-            )
-
-        states[f"Level_{level_num}_Start"] = {
-            "Type": "Parallel",
-            "Branches": [{"StartAt": step, "States": states}],
-            "Next": f"Level_{level_num + 1}_Start"
-            if level_num + 1 < len(level)
-            else "Success",
-        }
-
-        return states
-
-    def _create_step_state(
-        self,
-        step_name: str,
-        task_definition_arn: str,
-        environment: Dict[str, str],
-        resource_settings: ResourceSettings,
-    ) -> Dict[str, Any]:
-        """Create state machine step with resource-based retry policy."""
-        retry_policy = self._get_retry_policy(resource_settings)
-
-        return {
-            step_name: {
-                "Type": "Task",
-                "Resource": "arn:aws:states:::ecs:runTask.sync",
-                "Parameters": {
-                    "LaunchType": "FARGATE",
-                    "Cluster": self.config.ecs_cluster_arn,
-                    "TaskDefinition": task_definition_arn,
-                    "NetworkConfiguration": {
-                        "AwsvpcConfiguration": {
-                            "Subnets": self.config.subnet_ids,
-                            "SecurityGroups": self.config.security_group_ids,
-                            "AssignPublicIp": "ENABLED"
-                            if self.config.assign_public_ip
-                            else "DISABLED",
-                        }
-                    },
-                    "Overrides": {
-                        "ContainerOverrides": [
-                            {
-                                "Name": "zenml-container",
-                                "Environment": [
-                                    {"Name": k, "Value": v}
-                                    for k, v in environment.items()
-                                ],
-                                # Add resource overrides if needed
-                                "Cpu": resource_settings.cpu_count,
-                                "Memory": resource_settings.memory,
-                            }
-                        ]
-                    },
-                },
-                "Retry": retry_policy,
+            states[f"Level_{level_num}"] = {
+                "Type": "Parallel",
+                "Branches": [
+                    {
+                        "StartAt": step,
+                        "States": {
+                            step: self._create_step_state(task_definitions[step])
+                        },
+                    }
+                    for step in level
+                ],
+                "Next": f"Level_{level_num + 1}"
+                if level_num < len(dag_levels) - 1
+                else "Success",
                 "Catch": [
                     {
                         "ErrorEquals": ["States.ALL"],
@@ -579,96 +432,116 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                         "Next": "Failed",
                     }
                 ],
-                "End": True,
             }
-        }
 
-    def _get_retry_policy(
-        self, resource_settings: ResourceSettings
-    ) -> List[Dict[str, Any]]:
-        """Create dynamic retry policy based on resource requirements."""
-        base_policy = {
-            "ErrorEquals": ["States.TaskFailed"],
-            "IntervalSeconds": 30,
-            "MaxAttempts": 3,
-            "BackoffRate": 2.0,
-        }
-
-        # Adjust retries for resource-intensive steps
-        if resource_settings.gpu_count and resource_settings.gpu_count > 0:
-            return [
-                {
-                    **base_policy,
-                    "MaxAttempts": 1,  # Fewer retries for GPU steps
-                }
-            ]
-
-        if (resource_settings.cpu_count or 0) > 4 or (
-            resource_settings.memory or 0
-        ) > 16384:
-            return [{**base_policy, "IntervalSeconds": 60, "MaxAttempts": 2}]
-
-        return [base_policy]
-
-    def _deploy_and_execute(
-        self,
-        state_machine_name: str,
-        definition: Dict[str, Any],
-        deployment: "PipelineDeploymentResponse",
-    ) -> str:
-        """Deploy state machine and start execution"""
-        sfn = self._get_step_functions_client()
-
-        try:
-            create_response = sfn.create_state_machine(
-                name=state_machine_name,
-                definition=json.dumps(definition),
-                roleArn=self.config.execution_role,
-                type="STANDARD",
-                tags=[
-                    {
-                        "key": "zenml-pipeline",
-                        "value": deployment.pipeline_configuration.name,
-                    },
-                    {"key": "zenml-orchestrator", "value": "step-functions"},
-                ],
-            )
-            state_machine_arn = create_response["stateMachineArn"]
-        except sfn.exceptions.StateMachineAlreadyExists:
-            state_machine_arn = f"arn:aws:states:{self.config.region}:{self.config.account_id}:stateMachine:{state_machine_name}"
-
-        execution = sfn.start_execution(
-            stateMachineArn=state_machine_arn, name=f"exec-{uuid.uuid4().hex[:8]}"
+        states.update(
+            {
+                "Success": {"Type": "Succeed"},
+                "Failed": {"Type": "Fail", "Error": "ExecutionFailed"},
+            }
         )
 
-        return execution["executionArn"]
+        return {
+            "Comment": f"ZenML Pipeline: {deployment.pipeline_configuration.name}",
+            "StartAt": "Start",
+            "States": states,
+        }
+
+    def _create_step_state(self, task_definition_arn: str) -> Dict[str, Any]:
+        return {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::ecs:runTask.sync",
+            "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": self.config.ecs_cluster_arn,
+                "TaskDefinition": task_definition_arn,
+                "NetworkConfiguration": {
+                    "AwsvpcConfiguration": {
+                        "Subnets": self.config.subnet_ids,
+                        "SecurityGroups": self.config.security_group_ids,
+                        "AssignPublicIp": "ENABLED"
+                        if self.config.assign_public_ip
+                        else "DISABLED",
+                    }
+                },
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": ["States.TaskFailed"],
+                    "IntervalSeconds": 30,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 2.0,
+                }
+            ],
+            "End": True,
+        }
+
+    def _deploy_state_machine(
+        self,
+        sfn: boto3.client,
+        name: str,
+        definition: Dict[str, Any],
+    ) -> str:
+        response = sfn.create_state_machine(
+            name=name,
+            definition=json.dumps(definition),
+            roleArn=self.config.execution_role,
+            type="STANDARD",
+            tags=[{"key": "zenml-pipeline", "value": name}],
+        )
+        return response["stateMachineArn"]
+
+    def _start_execution(
+        self,
+        sfn: boto3.client,
+        state_machine_arn: str,
+        execution_id: str,
+    ) -> str:
+        response = sfn.start_execution(
+            stateMachineArn=state_machine_arn,
+            name=execution_id,
+        )
+        return response["executionArn"]
 
     def _generate_execution_metadata(
-        self, execution_arn: str
+        self,
+        execution_arn: str,
+        task_definitions: Dict[str, str],
     ) -> Iterator[Dict[str, MetadataType]]:
-        """Generate metadata with proper execution context"""
+        region = execution_arn.split(":")[3]
+        first_task_family = (
+            list(task_definitions.values())[0].split("/")[-1].split(":")[0]
+        )
+
         metadata = {
             METADATA_ORCHESTRATOR_RUN_ID: execution_arn,
-            METADATA_ORCHESTRATOR_URL: self._get_execution_console_url(execution_arn),
-            METADATA_ORCHESTRATOR_LOGS_URL: self._get_cloudwatch_logs_url(
-                execution_arn
+            METADATA_ORCHESTRATOR_URL: (
+                f"https://{region}.console.aws.amazon.com/states/home"
+                f"?region={region}#/executions/details/{execution_arn}"
+            ),
+            METADATA_ORCHESTRATOR_LOGS_URL: (
+                f"https://{region}.console.aws.amazon.com/cloudwatch/home"
+                f"?region={region}#logsV2:log-groups/log-group/$252Fecs$252F{first_task_family}"
             ),
         }
 
-        yield {k: Uri(v) if isinstance(v, str) else v for k, v in metadata.items()}
+        yield {k: Uri(v) for k, v in metadata.items()}
 
-    def _get_execution_console_url(self, execution_arn: str) -> str:
-        """Generate AWS Console URL for execution visualization"""
-        region = execution_arn.split(":")[3]
-        return (
-            f"https://{region}.console.aws.amazon.com/states/home"
-            f"?region={region}#/executions/details/{execution_arn}"
-        )
+    def _cleanup_resources(
+        self,
+        sfn: boto3.client,
+        ecs: boto3.client,
+        state_machine_arn: str,
+        task_definitions: Dict[str, str],
+    ):
+        try:
+            sfn.delete_state_machine(stateMachineArn=state_machine_arn)
+        except ClientError as e:
+            logger.warning(f"Failed to delete state machine: {e}")
 
-    def _get_cloudwatch_logs_url(self, execution_arn: str) -> str:
-        """Generate CloudWatch logs URL for execution monitoring"""
-        region = execution_arn.split(":")[3]
-        return (
-            f"https://{region}.console.aws.amazon.com/cloudwatch/home"
-            f"?region={region}#logsV2:log-groups/log-group/$252Faws$252Fstates$252F{execution_arn.split(':')[-1]}"
-        )
+        for arn in task_definitions.values():
+            try:
+                family = arn.split("/")[-1].split(":")[0]
+                self._cleanup_old_task_definitions(ecs, family)
+            except ClientError as e:
+                logger.warning(f"Failed to clean up task definitions: {e}")
