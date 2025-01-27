@@ -1,12 +1,9 @@
 """AWS Step Functions orchestrator flavor."""
 
-from typing import TYPE_CHECKING, Dict, Optional, Type
-
+from typing import TYPE_CHECKING, Dict, List, Optional, Type
 
 from zenml.config.base_settings import BaseSettings
-from zenml.integrations.aws import (
-    AWS_RESOURCE_TYPE,
-)
+from zenml.integrations.aws import AWS_RESOURCE_TYPE
 from zenml.models import ServiceConnectorRequirements
 from zenml.orchestrators import BaseOrchestratorConfig
 from zenml.orchestrators.base_orchestrator import BaseOrchestratorFlavor
@@ -18,6 +15,7 @@ if TYPE_CHECKING:
 DEFAULT_STATE_MACHINE_TYPE = "STANDARD"
 AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR = "aws_step_functions"
 
+
 class StepFunctionsOrchestratorSettings(BaseSettings):
     """Settings for the AWS Step Functions orchestrator.
 
@@ -27,18 +25,23 @@ class StepFunctionsOrchestratorSettings(BaseSettings):
             the client returns immediately and the pipeline is executed
             asynchronously. Defaults to `True`.
         state_machine_type: The type of state machine to create. Can be either
-            'STANDARD' or 'EXPRESS'.
-        execution_role: The IAM role to use for the step execution.
-        tags: Tags to apply to the state machine.
+            'STANDARD' or 'EXPRESS'. Defaults to 'STANDARD'.
+        tags: Tags to apply to the state machine and ECS tasks.
         max_runtime_in_seconds: The maximum runtime in seconds for the
-            state machine execution.
+            state machine execution. Defaults to 24 hours.
+        container_name: The name of the container in the ECS task definition.
+            Defaults to 'zenml-container'.
+        assign_public_ip: Whether to assign a public IP to the ECS tasks.
+            Defaults to True.
     """
 
     synchronous: bool = True
     state_machine_type: str = DEFAULT_STATE_MACHINE_TYPE
-    execution_role: Optional[str] = None
     tags: Dict[str, str] = {}
-    max_runtime_in_seconds: int = 86400
+    max_runtime_in_seconds: int = 86400  # 24 hours
+    container_name: str = "zenml-container"
+    assign_public_ip: bool = True
+
 
 class StepFunctionsOrchestratorConfig(
     BaseOrchestratorConfig, StepFunctionsOrchestratorSettings
@@ -53,22 +56,26 @@ class StepFunctionsOrchestratorConfig(
         loaded from the default AWS config.
 
     Attributes:
-        execution_role: The IAM role ARN to use for the state machine.
+        execution_role: The IAM role ARN to use for the state machine execution.
+        ecs_cluster_arn: The ARN of the ECS cluster to run tasks in.
+        ecs_task_definition_arn: The ARN of the ECS task definition to use.
+        subnet_ids: List of subnet IDs where ECS tasks will run.
+        security_group_ids: List of security group IDs for ECS tasks.
         aws_access_key_id: The AWS access key ID to use to authenticate to AWS.
-            If not provided, the value from the default AWS config will be used.
         aws_secret_access_key: The AWS secret access key to use to authenticate
-            to AWS. If not provided, the value from the default AWS config will
-            be used.
+            to AWS.
         aws_profile: The AWS profile to use for authentication if not using
-            service connectors or explicit credentials. If not provided, the
-            default profile will be used.
+            service connectors or explicit credentials.
         aws_auth_role_arn: The ARN of an intermediate IAM role to assume when
             authenticating to AWS.
-        region: The AWS region where the state machine will be created. If not
-            provided, the value from the default AWS config will be used.
+        region: The AWS region where the state machine will be created.
     """
 
     execution_role: str
+    ecs_cluster_arn: str
+    ecs_task_definition_arn: str
+    subnet_ids: List[str]
+    security_group_ids: List[str]
     aws_access_key_id: Optional[str] = SecretField(default=None)
     aws_secret_access_key: Optional[str] = SecretField(default=None)
     aws_profile: Optional[str] = None
@@ -92,6 +99,7 @@ class StepFunctionsOrchestratorConfig(
             Whether the orchestrator runs synchronous or not.
         """
         return self.synchronous
+
 
 class StepFunctionsOrchestratorFlavor(BaseOrchestratorFlavor):
     """Flavor for the AWS Step Functions orchestrator."""
@@ -141,7 +149,7 @@ class StepFunctionsOrchestratorFlavor(BaseOrchestratorFlavor):
         Returns:
             The flavor logo.
         """
-        return "https://public-flavor-logos.s3.eu-central-1.amazonaws.com/image_builder/aws.png"
+        return "https://public-flavor-logos.s3.eu-central-1.amazonaws.com/orchestrator/aws.png"
 
     @property
     def config_class(self) -> Type[StepFunctionsOrchestratorConfig]:

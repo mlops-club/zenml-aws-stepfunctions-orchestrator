@@ -2,6 +2,9 @@
 
 import os
 import re
+import json
+import uuid
+import time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -41,6 +44,21 @@ MAX_POLLING_ATTEMPTS = 100
 POLLING_DELAY = 30
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from zenml.config.resource_settings import ResourceSettings
+
+
+def get_orchestrator_run_name(pipeline_name: str) -> str:
+    """Generate a unique name for the orchestrator run.
+
+    Args:
+        pipeline_name: Name of the pipeline.
+
+    Returns:
+        A unique run name.
+    """
+    return f"zenml-{pipeline_name}-{uuid.uuid4().hex[:8]}"
 
 
 def dissect_state_machine_execution_arn(
@@ -192,7 +210,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                     aws_session_token=credentials["SessionToken"],
                     region_name=self.config.region,
                 )
-        return boto_session.client('stepfunctions')
+        return boto_session.client("stepfunctions")
 
     def prepare_or_run_pipeline(
         self,
@@ -208,28 +226,165 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             environment: Environment variables to set in the orchestration
                 environment.
 
-        Raises:
-            RuntimeError: If a connector is used that does not return a
-                `boto3.Session` object.
-            TypeError: If the network_config passed is not compatible.
-
         Yields:
             A dictionary of metadata related to the pipeline run.
         """
-        # TODO: Implement Step Functions specific pipeline execution logic
-        # This will involve:
-        # 1. Creating a state machine definition from the pipeline steps
-        # 2. Creating/updating the state machine
-        # 3. Starting an execution
-        # 4. Returning execution metadata
-        
-        raise NotImplementedError(
-            "Step Functions pipeline execution not yet implemented"
+        if deployment.schedule:
+            logger.warning(
+                "The Step Functions Orchestrator currently does not support the "
+                "use of schedules. The `schedule` will be ignored "
+                "and the pipeline will be run immediately."
+            )
+
+        # Step Functions requires state machine name to use alphanum and hyphens only
+        unsanitized_orchestrator_run_name = get_orchestrator_run_name(
+            pipeline_name=deployment.pipeline_configuration.name
+        )
+        # replace all non-alphanum and non-hyphens with hyphens
+        state_machine_name = re.sub(
+            r"[^a-zA-Z0-9\-]", "-", unsanitized_orchestrator_run_name
         )
 
-    def get_pipeline_run_metadata(
-        self, run_id: UUID
-    ) -> Dict[str, "MetadataType"]:
+        # Initialize Step Functions client
+        sfn_client = self._get_step_functions_client()
+
+        # Add run ID to environment variables
+        environment[ENV_ZENML_STEP_FUNCTIONS_RUN_ID] = (
+            "${execution_id}"  # This will be replaced by Step Functions
+        )
+
+        # Create state machine definition
+        steps = []
+        for step_name, step in deployment.step_configurations.items():
+            image = self.get_image(deployment=deployment, step_name=step_name)
+
+            step_settings = cast(
+                StepFunctionsOrchestratorSettings, self.get_settings(step)
+            )
+
+            # Create ECS task definition for this step
+            step_definition = {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::ecs:runTask.sync",
+                "Parameters": {
+                    "LaunchType": "FARGATE",
+                    "Cluster": self.config.ecs_cluster_arn,
+                    "TaskDefinition": self.config.ecs_task_definition_arn,
+                    "NetworkConfiguration": {
+                        "AwsvpcConfiguration": {
+                            "Subnets": self.config.subnet_ids,
+                            "SecurityGroups": self.config.security_group_ids,
+                            "AssignPublicIp": "ENABLED"
+                            if step_settings.assign_public_ip
+                            else "DISABLED",
+                        }
+                    },
+                    "Overrides": {
+                        "ContainerOverrides": [
+                            {
+                                "Name": step_settings.container_name,
+                                "Image": image,
+                                "Environment": [
+                                    {"Name": key, "Value": value}
+                                    for key, value in environment.items()
+                                ],
+                            }
+                        ]
+                    },
+                },
+                "TimeoutSeconds": step_settings.max_runtime_in_seconds,
+                "Next": step.spec.upstream_steps[0]
+                if step.spec.upstream_steps
+                else "Success",
+                "ResultPath": None,
+                "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "Failed"}],
+            }
+            self._configure_task_resources(
+                step_definition=step_definition,
+                resource_settings=step.config.resource_settings,
+            )
+            steps.append({step_name: step_definition})
+
+        # Add final success and failure states
+        steps.extend(
+            [
+                {"Success": {"Type": "Succeed"}},
+                {
+                    "Failed": {
+                        "Type": "Fail",
+                        "Error": "StepFailed",
+                        "Cause": "A step in the pipeline failed",
+                    }
+                },
+            ]
+        )
+
+        # Create state machine definition
+        state_machine_definition = {
+            "Comment": f"ZenML pipeline: {deployment.pipeline_configuration.name}",
+            "StartAt": list(deployment.step_configurations.keys())[0],
+            "States": {k: v for d in steps for k, v in d.items()},
+        }
+
+        settings = cast(
+            StepFunctionsOrchestratorSettings, self.get_settings(deployment)
+        )
+
+        # Create/update state machine
+        try:
+            response = sfn_client.create_state_machine(
+                name=state_machine_name,
+                definition=json.dumps(state_machine_definition),
+                roleArn=self.config.execution_role,
+                type=settings.state_machine_type,
+                tags=[{"key": k, "value": v} for k, v in settings.tags.items()],
+            )
+            state_machine_arn = response["stateMachineArn"]
+        except sfn_client.exceptions.StateMachineAlreadyExists:
+            # Update existing state machine
+            state_machine_arn = f"arn:aws:states:{self.config.region}:{self.config.account_id}:stateMachine:{state_machine_name}"
+            response = sfn_client.update_state_machine(
+                stateMachineArn=state_machine_arn,
+                definition=json.dumps(state_machine_definition),
+                roleArn=self.config.execution_role,
+            )
+
+        # Start execution
+        execution = sfn_client.start_execution(
+            stateMachineArn=state_machine_arn,
+            name=f"{state_machine_name}-{uuid.uuid4()}",
+        )
+
+        # Yield metadata based on the execution
+        yield from self.compute_metadata(execution=execution, settings=settings)
+
+        # Wait for completion if synchronous execution is requested
+        if settings.synchronous:
+            logger.info(
+                "Executing synchronously. Waiting for state machine to finish... \n"
+                "At this point you can `Ctrl-C` out without cancelling the "
+                "execution."
+            )
+            try:
+                while True:
+                    status = sfn_client.describe_execution(
+                        executionArn=execution["executionArn"]
+                    )["status"]
+                    if status in ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"]:
+                        break
+                    time.sleep(POLLING_DELAY)
+
+                if status == "SUCCEEDED":
+                    logger.info("Pipeline completed successfully.")
+                else:
+                    raise RuntimeError(f"Pipeline failed with status: {status}")
+
+            except Exception as e:
+                raise RuntimeError(
+                    f"Error while waiting for pipeline execution: {str(e)}"
+                )
+
+    def get_pipeline_run_metadata(self, run_id: UUID) -> Dict[str, "MetadataType"]:
         """Get general component-specific metadata for a pipeline run.
 
         Args:
@@ -262,15 +417,11 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         # Make sure that the stack exists and is accessible
         if run.stack is None:
             raise ValueError(
-                "The stack that the run was executed on is not available "
-                "anymore."
+                "The stack that the run was executed on is not available anymore."
             )
 
         # Make sure that the run belongs to this orchestrator
-        assert (
-            self.id
-            == run.stack.components[StackComponentType.ORCHESTRATOR][0].id
-        )
+        assert self.id == run.stack.components[StackComponentType.ORCHESTRATOR][0].id
 
         # Initialize the Step Functions client
         sfn_client = self._get_step_functions_client()
@@ -282,13 +433,10 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             run_id = run.orchestrator_run_id
         else:
             raise ValueError(
-                "Can not find the orchestrator run ID, thus can not fetch "
-                "the status."
+                "Can not find the orchestrator run ID, thus can not fetch the status."
             )
-        
-        response = sfn_client.describe_execution(
-            executionArn=run_id
-        )
+
+        response = sfn_client.describe_execution(executionArn=run_id)
         status = response["status"]
 
         # Map Step Functions status to ZenML ExecutionStatus
@@ -299,7 +447,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         elif status in ["SUCCEEDED"]:
             return ExecutionStatus.COMPLETED
         else:
-            raise ValueError(f"Unknown status for the state machine execution: {status}")
+            raise ValueError(
+                f"Unknown status for the state machine execution: {status}"
+            )
 
     def compute_metadata(
         self,
@@ -327,9 +477,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             metadata[METADATA_ORCHESTRATOR_URL] = Uri(orchestrator_url)
 
         # URL to the corresponding CloudWatch logs
-        if logs_url := self._compute_orchestrator_logs_url(
-            execution, settings
-        ):
+        if logs_url := self._compute_orchestrator_logs_url(execution, settings):
             metadata[METADATA_ORCHESTRATOR_LOGS_URL] = Uri(logs_url)
 
         yield metadata
@@ -387,9 +535,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 f"/$252Faws$252Fstates$252F{execution_id}"
             )
         except Exception as e:
-            logger.warning(
-                f"There was an issue while extracting the logs url: {e}"
-            )
+            logger.warning(f"There was an issue while extracting the logs url: {e}")
             return None
 
     @staticmethod
@@ -412,3 +558,32 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 f"There was an issue while extracting the execution run ID: {e}"
             )
             return None
+
+    def _configure_task_resources(
+        self,
+        step_definition: Dict[str, Any],
+        resource_settings: Optional["ResourceSettings"],
+    ) -> None:
+        """Configure CPU and memory for an ECS task.
+
+        Args:
+            step_definition: The Step Functions task definition.
+            resource_settings: Resource settings for the step.
+        """
+        if not resource_settings:
+            return
+
+        container_overrides = step_definition["Parameters"]["Overrides"]
+
+        # Configure CPU and memory at task level
+        if resource_settings.cpu_count:
+            container_overrides["CPU"] = str(int(resource_settings.cpu_count * 1024))
+
+        if resource_settings.memory:
+            container_overrides["Memory"] = str(int(resource_settings.memory * 1024))
+
+        if resource_settings.gpu_count:
+            logger.warning(
+                "GPU configuration is not supported in ECS Fargate. "
+                "To use GPUs, consider using AWS Batch or SageMaker instead."
+            )
