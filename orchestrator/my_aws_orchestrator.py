@@ -218,6 +218,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         image: str,
         resource_settings: Optional["ResourceSettings"],
         step_settings: "StepFunctionsOrchestratorSettings",
+        pipeline_name: str,
     ) -> str:
         """Dynamically create or update an ECS task definition.
 
@@ -226,6 +227,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             image: Docker image to use
             resource_settings: CPU/Memory requirements
             step_settings: Step-specific settings
+            pipeline_name: Name of the pipeline
 
         Returns:
             Task definition ARN
@@ -253,7 +255,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             "cpu": cpu,
             "memory": memory,
             "executionRoleArn": self.config.execution_role,
-            "taskRoleArn": self.config.task_role,  # Add this to config if not exists
+            "taskRoleArn": self.config.task_role,
             "containerDefinitions": [
                 {
                     "name": step_settings.container_name,
@@ -269,6 +271,14 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                         },
                     },
                 }
+            ],
+            # Add tags to task definition
+            "tags": [
+                {"key": "zenml.pipeline_name", "value": pipeline_name},
+                {"key": "zenml.step_name", "value": step_name},
+                {"key": "zenml.orchestrator", "value": "step_functions"},
+                {"key": "zenml.resource_type", "value": "task_definition"},
+                *[{"key": k, "value": v} for k, v in step_settings.tags.items()],
             ],
         }
 
@@ -319,6 +329,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             "${execution_id}"  # This will be replaced by Step Functions
         )
 
+        # Get pipeline name for tagging
+        pipeline_name = deployment.pipeline_configuration.name
+
         # Create state machine definition
         steps = []
         for step_name, step in deployment.step_configurations.items():
@@ -333,6 +346,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 image=image,
                 resource_settings=step.config.resource_settings,
                 step_settings=step_settings,
+                pipeline_name=pipeline_name,
             )
 
             step_definition = {
@@ -341,7 +355,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 "Parameters": {
                     "LaunchType": "FARGATE",
                     "Cluster": self.config.ecs_cluster_arn,
-                    "TaskDefinition": task_definition_arn,  # Use dynamic task definition
+                    "TaskDefinition": task_definition_arn,
                     "NetworkConfiguration": {
                         "AwsvpcConfiguration": {
                             "Subnets": self.config.subnet_ids,
@@ -362,6 +376,17 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                             }
                         ]
                     },
+                    # Add tags to ECS tasks
+                    "Tags": [
+                        {"key": "zenml.pipeline_name", "value": pipeline_name},
+                        {"key": "zenml.step_name", "value": step_name},
+                        {"key": "zenml.orchestrator", "value": "step_functions"},
+                        {"key": "zenml.resource_type", "value": "ecs_task"},
+                        *[
+                            {"key": k, "value": v}
+                            for k, v in step_settings.tags.items()
+                        ],
+                    ],
                 },
                 "TimeoutSeconds": step_settings.max_runtime_in_seconds,
                 "Next": step.spec.upstream_steps[0]
@@ -415,7 +440,12 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 definition=json.dumps(state_machine_definition),
                 roleArn=self.config.execution_role,
                 type=settings.state_machine_type,
-                tags=[{"key": k, "value": v} for k, v in settings.tags.items()],
+                tags=[
+                    {"key": "zenml.pipeline_name", "value": pipeline_name},
+                    {"key": "zenml.orchestrator", "value": "step_functions"},
+                    {"key": "zenml.resource_type", "value": "state_machine"},
+                    *[{"key": k, "value": v} for k, v in settings.tags.items()],
+                ],
             )
             state_machine_arn = response["stateMachineArn"]
         except sfn_client.exceptions.StateMachineAlreadyExists:
