@@ -35,6 +35,7 @@ from zenml.logger import get_logger
 from zenml.metadata.metadata_types import MetadataType, Uri
 from zenml.orchestrators import ContainerizedOrchestrator
 from zenml.stack import StackValidator
+from zenml.config.resource_settings import ResourceSettings
 
 # Custom imports
 from orchestrator.my_aws_orchestrator_flavor import (
@@ -367,13 +368,105 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         }
         return hashlib.sha256(json.dumps(hash_data).encode()).hexdigest()
 
+    def _register_new_task_definition(
+        self,
+        step_name: str,
+        step_config: Any,
+        pipeline_name: str,
+        family_name: str,
+    ) -> str:
+        """Create new ECS task definition with resource settings."""
+        ecs = self._get_ecs_client()
+        resource_settings = step_config.config.resource_settings or ResourceSettings()
+
+        # Convert ZenML resource settings to ECS units
+        cpu = (
+            str(int(resource_settings.cpu_count * 1024))
+            if resource_settings.cpu_count
+            else "1024"
+        )
+        memory = (
+            str(int(resource_settings.memory)) if resource_settings.memory else "2048"
+        )  # AWS uses MB
+
+        task_definition = {
+            "family": family_name,
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": cpu,
+            "memory": memory,
+            "executionRoleArn": self.config.execution_role,
+            "taskRoleArn": self.config.task_role,
+            "containerDefinitions": [
+                {
+                    "name": "zenml-container",
+                    "image": self.get_image(step_config),
+                    "essential": True,
+                    "logConfiguration": {
+                        "logDriver": "awslogs",
+                        "options": {
+                            "awslogs-group": f"/ecs/{family_name}",
+                            "awslogs-region": self.config.region,
+                            "awslogs-stream-prefix": "zenml",
+                            "awslogs-create-group": "true",
+                        },
+                    },
+                    # Add resource limits
+                    "cpu": int(resource_settings.cpu_count)
+                    if resource_settings.cpu_count
+                    else 1024,
+                    "memoryReservation": int(resource_settings.memory)
+                    if resource_settings.memory
+                    else 2048,
+                }
+            ],
+            "tags": [
+                {"key": "zenml-pipeline", "value": pipeline_name},
+                {"key": "zenml-step", "value": step_name},
+            ],
+        }
+
+        # Handle GPU settings
+        if resource_settings.gpu_count and resource_settings.gpu_count > 0:
+            task_definition["runtimePlatform"] = {
+                "cpuArchitecture": "ARM64",
+                "operatingSystemFamily": "LINUX",
+            }
+            task_definition["containerDefinitions"][0]["resourceRequirements"] = [
+                {"type": "GPU", "value": str(resource_settings.gpu_count)}
+            ]
+
+        try:
+            response = ecs.register_task_definition(**task_definition)
+            return response["taskDefinition"]["taskDefinitionArn"]
+        except ClientError as e:
+            logger.error(f"Failed to register task definition: {e}")
+            raise RuntimeError("Task definition registration failed") from e
+
+    def _hash_step_configuration(self, step_config) -> str:
+        """Generate hash incorporating resource settings."""
+        resource_settings = step_config.config.resource_settings or ResourceSettings()
+
+        hash_data = {
+            "image": self.get_image(step_config),
+            "cpu": resource_settings.cpu_count,
+            "memory": resource_settings.memory,
+            "gpu": resource_settings.gpu_count,
+            "gpu_type": resource_settings.gpu_type,
+        }
+        return hashlib.sha256(
+            json.dumps(hash_data, sort_keys=True).encode()
+        ).hexdigest()
+
     def _build_state_machine_definition(
         self,
         deployment: "PipelineDeploymentResponse",
         task_definitions: Dict[str, str],
         environment: Dict[str, str],
     ) -> Dict[str, Any]:
-        """Construct state machine definition with parallel execution"""
+        """Construct state machine with resource-aware steps."""
+        # Existing implementation remains the same, but ensure resource settings
+        # are passed to step state creation
         dag_levels = build_dag_levels(deployment)
         states = {
             "Start": {"Type": "Pass", "Next": "PipelineFlow"},
@@ -386,7 +479,11 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             branch = {
                 "StartAt": f"Level_{level_num}_Start",
                 "States": self._build_level_states(
-                    level, task_definitions, environment, level_num
+                    level,
+                    task_definitions,
+                    environment,
+                    level_num,
+                    deployment,  # Pass deployment to access resource settings
                 ),
             }
             states["PipelineFlow"]["Branches"].append(branch)
@@ -403,13 +500,22 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         task_definitions: Dict[str, str],
         environment: Dict[str, str],
         level_num: int,
+        deployment: "PipelineDeploymentResponse",
     ) -> Dict[str, Any]:
-        """Create states for a single DAG level"""
+        """Create states with resource settings."""
         states = {}
         for step_name in level:
+            step_config = deployment.step_configurations[step_name]
+            resource_settings = (
+                step_config.config.resource_settings or ResourceSettings()
+            )
+
             states.update(
                 self._create_step_state(
-                    step_name, task_definitions[step_name], environment
+                    step_name,
+                    task_definitions[step_name],
+                    environment,
+                    resource_settings,
                 )
             )
 
@@ -424,9 +530,15 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         return states
 
     def _create_step_state(
-        self, step_name: str, task_definition_arn: str, environment: Dict[str, str]
+        self,
+        step_name: str,
+        task_definition_arn: str,
+        environment: Dict[str, str],
+        resource_settings: ResourceSettings,
     ) -> Dict[str, Any]:
-        """Create state machine definition for a single step"""
+        """Create state machine step with resource-based retry policy."""
+        retry_policy = self._get_retry_policy(resource_settings)
+
         return {
             step_name: {
                 "Type": "Task",
@@ -452,18 +564,14 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                                     {"Name": k, "Value": v}
                                     for k, v in environment.items()
                                 ],
+                                # Add resource overrides if needed
+                                "Cpu": resource_settings.cpu_count,
+                                "Memory": resource_settings.memory,
                             }
                         ]
                     },
                 },
-                "Retry": [
-                    {
-                        "ErrorEquals": ["States.TaskFailed"],
-                        "IntervalSeconds": 30,
-                        "MaxAttempts": 3,
-                        "BackoffRate": 2.0,
-                    }
-                ],
+                "Retry": retry_policy,
                 "Catch": [
                     {
                         "ErrorEquals": ["States.ALL"],
@@ -474,6 +582,33 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 "End": True,
             }
         }
+
+    def _get_retry_policy(
+        self, resource_settings: ResourceSettings
+    ) -> List[Dict[str, Any]]:
+        """Create dynamic retry policy based on resource requirements."""
+        base_policy = {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 30,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0,
+        }
+
+        # Adjust retries for resource-intensive steps
+        if resource_settings.gpu_count and resource_settings.gpu_count > 0:
+            return [
+                {
+                    **base_policy,
+                    "MaxAttempts": 1,  # Fewer retries for GPU steps
+                }
+            ]
+
+        if (resource_settings.cpu_count or 0) > 4 or (
+            resource_settings.memory or 0
+        ) > 16384:
+            return [{**base_policy, "IntervalSeconds": 60, "MaxAttempts": 2}]
+
+        return [base_policy]
 
     def _deploy_and_execute(
         self,
