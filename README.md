@@ -198,6 +198,7 @@ The AWS Service Connector needs the following IAM permissions to work with Step 
                 "ecs:ListTasks",
                 "ecs:DescribeTaskDefinition",
                 "iam:PassRole"
+                "iam:ListRoles"  # Needed for role validation
                 "ecs:RegisterTaskDefinition",
                 "ecs:DeregisterTaskDefinition",
                 "ecs:ListTaskDefinitions",
@@ -265,6 +266,12 @@ If you're using the full stack with S3 and ECR:
 
 You can combine these permissions into a single IAM policy or create separate policies depending on your security requirements. For production environments, it's recommended to scope the `Resource` fields to specific ARNs rather than using `"*"`.
 
+Additional Notes:
+
+- Ensure Fargate launch type is enabled in ECS cluster
+- Verify subnet IP addressing (Fargate requires non-default VPC)
+- Confirm security groups allow outbound traffic
+
 
 #### 3. Register Required Stack Components
 
@@ -285,11 +292,10 @@ zenml container-registry register ecr_registry \
 zenml orchestrator register step_functions_orchestrator \
     -f aws_step_functions \
     --ecs_cluster_arn=<YOUR_ECS_CLUSTER_ARN> \
-    --ecs_task_definition_arn=<YOUR_TASK_DEF_ARN> \
     --execution_role=<YOUR_EXECUTION_ROLE_ARN> \
+    --task_role=<YOUR_TASK_ROLE_ARN> \
     --subnet_ids='["subnet-xxx", "subnet-yyy"]' \
     --security_group_ids='["sg-xxx"]' \
-    --account_id=<YOUR_AWS_ACCOUNT_ID> \
     --region=<YOUR_AWS_REGION>
 ```
 
