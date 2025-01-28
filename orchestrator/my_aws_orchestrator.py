@@ -326,6 +326,41 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         return task_defs
 
+    def _get_existing_task_definition(self, ecs: boto3.client, family_name: str) -> str:
+        """Retrieve an existing task definition ARN for a given family name.
+
+        Args:
+            ecs: The ECS client.
+            family_name: The family name of the task definition.
+
+        Returns:
+            The ARN of the existing task definition.
+
+        Raises:
+            ClientError: If no task definition is found.
+        """
+        try:
+            response = ecs.list_task_definitions(
+                familyPrefix=family_name, status="ACTIVE", sort="DESC", maxResults=1
+            )
+            task_definition_arns = response.get("taskDefinitionArns", [])
+            if not task_definition_arns:
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "NoSuchTaskDefinition",
+                            "Message": f"No active task definition found for family {family_name}",
+                        }
+                    },
+                    "ListTaskDefinitions",
+                )
+            return task_definition_arns[0]
+        except ClientError as e:
+            logger.error(
+                f"Failed to retrieve task definition for family {family_name}: {e}"
+            )
+            raise
+
     def _cleanup_old_task_definitions(self, ecs: boto3.client, family_name: str):
         try:
             versions = ecs.list_task_definitions(
@@ -479,38 +514,3 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 self._cleanup_old_task_definitions(ecs, family)
             except ClientError as e:
                 logger.warning(f"Failed to clean up task definitions: {e}")
-
-    def _get_existing_task_definition(self, ecs: boto3.client, family_name: str) -> str:
-        """Retrieve an existing task definition ARN for a given family name.
-
-        Args:
-            ecs: The ECS client.
-            family_name: The family name of the task definition.
-
-        Returns:
-            The ARN of the existing task definition.
-
-        Raises:
-            ClientError: If no task definition is found.
-        """
-        try:
-            response = ecs.list_task_definitions(
-                familyPrefix=family_name, status="ACTIVE", sort="DESC", maxResults=1
-            )
-            task_definition_arns = response.get("taskDefinitionArns", [])
-            if not task_definition_arns:
-                raise ClientError(
-                    {
-                        "Error": {
-                            "Code": "NoSuchTaskDefinition",
-                            "Message": f"No active task definition found for family {family_name}",
-                        }
-                    },
-                    "ListTaskDefinitions",
-                )
-            return task_definition_arns[0]
-        except ClientError as e:
-            logger.error(
-                f"Failed to retrieve task definition for family {family_name}: {e}"
-            )
-            raise
