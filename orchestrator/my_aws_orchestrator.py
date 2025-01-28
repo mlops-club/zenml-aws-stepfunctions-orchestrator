@@ -354,6 +354,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         name: str,
     ) -> Dict[str, Any]:
         dag_levels = build_dag_levels(deployment)
+        settings = cast(
+            StepFunctionsOrchestratorSettings, self.get_settings(deployment)
+        )
         states = {"Start": {"Type": "Pass", "Next": "Level_0"}}
 
         for level_num, level in enumerate(dag_levels):
@@ -363,7 +366,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                     {
                         "StartAt": step,
                         "States": {
-                            step: self._create_step_state(task_definitions[step])
+                            step: self._create_step_state(
+                                task_definitions[step], settings
+                            )
                         },
                     }
                     for step in level
@@ -401,7 +406,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         )
         return response["stateMachineArn"]
 
-    def _create_step_state(self, task_definition_arn: str) -> Dict[str, Any]:
+    def _create_step_state(
+        self, task_definition_arn: str, settings: StepFunctionsOrchestratorSettings
+    ) -> Dict[str, Any]:
         return {
             "Type": "Task",
             "Resource": "arn:aws:states:::ecs:runTask.sync",
@@ -414,7 +421,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                         "Subnets": self.config.subnet_ids,
                         "SecurityGroups": self.config.security_group_ids,
                         "AssignPublicIp": "ENABLED"
-                        if self.config.assign_public_ip
+                        if settings.assign_public_ip
                         else "DISABLED",
                     }
                 },
@@ -422,9 +429,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             "Retry": [
                 {
                     "ErrorEquals": ["States.TaskFailed"],
-                    "IntervalSeconds": 30,
-                    "MaxAttempts": 3,
-                    "BackoffRate": 2.0,
+                    "IntervalSeconds": settings.retry_interval_seconds,
+                    "MaxAttempts": settings.max_attempts,
+                    "BackoffRate": settings.backoff_rate,
                 }
             ],
             "End": True,

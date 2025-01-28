@@ -20,20 +20,26 @@ class StepFunctionsOrchestratorSettings(BaseSettings):
     """Settings for the AWS Step Functions Orchestrator.
 
     Attributes:
-        container_name: Name of the container in task definition
-        assign_public_ip: Whether to assign public IP to tasks
-        max_runtime_in_seconds: Maximum runtime for tasks
         state_machine_type: Type of state machine (STANDARD/EXPRESS)
+        network_mode: Network mode for the task
+        requires_compatibilities: List of compatibilities for the task
         tags: Custom tags to apply to resources
         synchronous: Whether to wait for pipeline completion
+        assign_public_ip: Whether to assign public IP to tasks
+        retry_interval_seconds: Retry interval in seconds
+        max_attempts: Maximum number of attempts
+        backoff_rate: Backoff rate
     """
 
-    container_name: str = "zenml"
     state_machine_type: str = "STANDARD"
     network_mode: str = "awsvpc"
     requires_compatibilities: List[str] = ["FARGATE"]
     tags: Dict[str, str] = {}
     synchronous: bool = True
+    assign_public_ip: bool = True
+    retry_interval_seconds: int = 30
+    max_attempts: int = 3
+    backoff_rate: float = 2.0
 
 
 class StepFunctionsOrchestratorConfig(
