@@ -36,7 +36,9 @@ class StepFunctionsOrchestratorSettings(BaseSettings):
     synchronous: bool = True
 
 
-class StepFunctionsOrchestratorConfig(BaseConfig):
+class StepFunctionsOrchestratorConfig(
+    BaseOrchestratorConfig, StepFunctionsOrchestratorSettings
+):
     """Configuration for the AWS Step Functions Orchestrator.
 
     Attributes:
@@ -46,7 +48,6 @@ class StepFunctionsOrchestratorConfig(BaseConfig):
         subnet_ids: List of subnet IDs
         security_group_ids: List of security group IDs
         region: AWS region
-        account_id: AWS account ID
     """
 
     ecs_cluster_arn: str
@@ -55,7 +56,6 @@ class StepFunctionsOrchestratorConfig(BaseConfig):
     subnet_ids: List[str]
     security_group_ids: List[str]
     region: str
-    account_id: str
 
     @property
     def is_remote(self) -> bool:

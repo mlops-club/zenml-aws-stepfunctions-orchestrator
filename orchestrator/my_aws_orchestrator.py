@@ -19,6 +19,9 @@ from typing import (
 
 from collections import deque
 from zenml.models import PipelineDeploymentResponse
+from zenml.config.step_configurations import Step
+from zenml.entrypoints import StepEntrypointConfiguration
+
 from botocore.exceptions import ClientError
 
 import boto3
@@ -187,17 +190,25 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             RuntimeError: If the connector returns the wrong type for the
                 session.
         """
-        # Assume service connector is set up correctly
-        boto_session: boto3.Session
-        if connector := self.get_connector():
-            boto_session = connector.connect()
-            if not isinstance(boto_session, boto3.Session):
-                raise RuntimeError(
-                    f"Expected to receive a `boto3.Session` object from the "
-                    f"linked connector, but got type `{type(boto_session)}`."
-                )
-        else:
-            raise RuntimeError("Service connector is not set up correctly.")
+        # Use service connector
+        try:
+            boto_session: boto3.Session
+            if connector := self.get_connector():
+                boto_session = connector.connect()
+                if not isinstance(boto_session, boto3.Session):
+                    raise RuntimeError(
+                        f"Expected to receive a `boto3.Session` object from the "
+                        f"linked connector, but got type `{type(boto_session)}`."
+                    )
+            else:
+                raise RuntimeError("Service connector is not set up correctly.")
+        except Exception as e:
+            logger.error(f"Error connecting to AWS using service connector: {e}.")
+            # Use local client
+            boto_session = boto3.Session(
+                region_name=self.config.region,
+            )
+
         return boto_session.client("stepfunctions")
 
     def prepare_or_run_pipeline(
@@ -212,9 +223,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         try:
             pipeline_name = deployment.pipeline_configuration.name
-            state_machine_name = (
-                f"zenml-{pipeline_name}-{self._generate_random_string(6)}"
-            )
+            state_machine_name = f"zenml-{pipeline_name}-{_generate_random_string(6)}"
             execution_id = f"zenml-{_generate_random_string(8)}"
             environment[ENV_ZENML_STEP_FUNCTIONS_RUN_ID] = execution_id
 
@@ -258,7 +267,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 task_def_arn = self._get_existing_task_definition(ecs, family_name)
             except ClientError:
                 task_def_arn = self._register_task_definition(
-                    ecs, family_name, step_config, environment
+                    deployment, ecs, family_name, step_name, step_config, environment
                 )
 
             task_defs[step_name] = task_def_arn
@@ -293,14 +302,22 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
 
     def _register_task_definition(
         self,
+        deployment: "PipelineDeploymentResponse",
         ecs: boto3.client,
         family_name: str,
-        step_config,
+        step_name: str,
+        step_config: Step,
         environment: Dict[str, str],
     ) -> str:
-        resource = step_config.config.resource_settings or ResourceSettings()
+        resource = step_config.config.resource_settings
         self._validate_fargate_resources(resource)
-
+        image = self.get_image(deployment, step_name)
+        command = StepEntrypointConfiguration.get_entrypoint_command()
+        arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
+            step_name=step_name,
+            deployment_id=deployment.id,
+        )
+        entrypoint = command + arguments
         response = ecs.register_task_definition(
             family=family_name,
             networkMode="awsvpc",
@@ -312,8 +329,8 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             containerDefinitions=[
                 {
                     "name": "zenml-container",
-                    "image": self.get_image(step_config),
-                    "command": step_config.spec.command,
+                    "image": image,
+                    "command": entrypoint,
                     "environment": [
                         {"name": k, "value": v} for k, v in environment.items()
                     ],
@@ -483,3 +500,38 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 self._cleanup_old_task_definitions(ecs, family)
             except ClientError as e:
                 logger.warning(f"Failed to clean up task definitions: {e}")
+
+    def _get_existing_task_definition(self, ecs: boto3.client, family_name: str) -> str:
+        """Retrieve an existing task definition ARN for a given family name.
+
+        Args:
+            ecs: The ECS client.
+            family_name: The family name of the task definition.
+
+        Returns:
+            The ARN of the existing task definition.
+
+        Raises:
+            ClientError: If no task definition is found.
+        """
+        try:
+            response = ecs.list_task_definitions(
+                familyPrefix=family_name, status="ACTIVE", sort="DESC", maxResults=1
+            )
+            task_definition_arns = response.get("taskDefinitionArns", [])
+            if not task_definition_arns:
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "NoSuchTaskDefinition",
+                            "Message": f"No active task definition found for family {family_name}",
+                        }
+                    },
+                    "ListTaskDefinitions",
+                )
+            return task_definition_arns[0]
+        except ClientError as e:
+            logger.error(
+                f"Failed to retrieve task definition for family {family_name}: {e}"
+            )
+            raise
