@@ -187,8 +187,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             RuntimeError: If the connector returns the wrong type for the
                 session.
         """
-        # Get authenticated session
-        # Option 1: Service connector
+        # Assume service connector is set up correctly
         boto_session: boto3.Session
         if connector := self.get_connector():
             boto_session = connector.connect()
@@ -197,29 +196,8 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                     f"Expected to receive a `boto3.Session` object from the "
                     f"linked connector, but got type `{type(boto_session)}`."
                 )
-        # Option 2: Explicit configuration
-        # Args that are not provided will be taken from the default AWS config.
         else:
-            boto_session = boto3.Session(
-                aws_access_key_id=self.config.aws_access_key_id,
-                aws_secret_access_key=self.config.aws_secret_access_key,
-                region_name=self.config.region,
-                profile_name=self.config.aws_profile,
-            )
-            # If a role ARN is provided for authentication, assume the role
-            if self.config.aws_auth_role_arn:
-                sts = boto_session.client("sts")
-                response = sts.assume_role(
-                    RoleArn=self.config.aws_auth_role_arn,
-                    RoleSessionName="zenml-step-functions-orchestrator",
-                )
-                credentials = response["Credentials"]
-                boto_session = boto3.Session(
-                    aws_access_key_id=credentials["AccessKeyId"],
-                    aws_secret_access_key=credentials["SecretAccessKey"],
-                    aws_session_token=credentials["SessionToken"],
-                    region_name=self.config.region,
-                )
+            raise RuntimeError("Service connector is not set up correctly.")
         return boto_session.client("stepfunctions")
 
     def prepare_or_run_pipeline(
@@ -233,7 +211,6 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         state_machine_arn = None
 
         try:
-            self._validate_aws_configuration()
             pipeline_name = deployment.pipeline_configuration.name
             state_machine_name = (
                 f"zenml-{pipeline_name}-{self._generate_random_string(6)}"
@@ -263,45 +240,6 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         finally:
             if state_machine_arn:
                 self._cleanup_resources(sfn, ecs, state_machine_arn, task_definitions)
-
-    def _validate_aws_configuration(self):
-        self._validate_iam_permissions()
-        self._validate_network_configuration()
-
-    def _validate_iam_permissions(self):
-        iam = boto3.client("iam")
-        required_actions = [
-            "states:CreateStateMachine",
-            "states:StartExecution",
-            "ecs:RunTask",
-            "ecs:DescribeTasks",
-            "logs:CreateLogGroup",
-            "logs:PutLogEvents",
-        ]
-
-        for role_arn in [self.config.execution_role, self.config.task_role]:
-            response = iam.simulate_principal_policy(
-                PolicySourceArn=role_arn,
-                ActionNames=required_actions,
-                ResourceArns=["*"],
-            )
-            denied = [
-                result["EvalActionName"]
-                for result in response["EvaluationResults"]
-                if result["EvalDecision"] != "allowed"
-            ]
-            if denied:
-                raise RuntimeError(
-                    f"Role {role_arn} missing permissions: {', '.join(denied)}"
-                )
-
-    def _validate_network_configuration(self):
-        ec2 = boto3.client("ec2")
-        try:
-            ec2.describe_subnets(SubnetIds=self.config.subnet_ids)
-            ec2.describe_security_groups(GroupIds=self.config.security_group_ids)
-        except ClientError as e:
-            raise RuntimeError(f"Invalid network configuration: {e}")
 
     def _create_task_definitions(
         self,

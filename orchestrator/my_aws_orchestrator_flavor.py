@@ -8,7 +8,6 @@ from zenml.integrations.aws import AWS_RESOURCE_TYPE
 from zenml.models import ServiceConnectorRequirements
 from zenml.orchestrators import BaseOrchestratorConfig
 from zenml.orchestrators.base_orchestrator import BaseOrchestratorFlavor
-from zenml.utils.secret_utils import SecretField
 
 if TYPE_CHECKING:
     from orchestrator.my_aws_orchestrator import StepFunctionsOrchestrator
@@ -57,13 +56,6 @@ class StepFunctionsOrchestratorConfig(BaseConfig):
     security_group_ids: List[str]
     region: str
     account_id: str
-
-    # AWS authentication (optional if using service connector)
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_session_token: Optional[str] = None
-    aws_profile: Optional[str] = None
-    aws_auth_role_arn: Optional[str] = None
 
     @property
     def is_remote(self) -> bool:
