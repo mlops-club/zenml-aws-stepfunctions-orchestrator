@@ -29,9 +29,9 @@ class StepFunctionsOrchestratorSettings(BaseSettings):
     """
 
     container_name: str = "zenml"
-    assign_public_ip: bool = True
-    max_runtime_in_seconds: int = 3600
     state_machine_type: str = "STANDARD"
+    network_mode: str = "awsvpc"
+    requires_compatibilities: List[str] = ["FARGATE"]
     tags: Dict[str, str] = {}
     synchronous: bool = True
 

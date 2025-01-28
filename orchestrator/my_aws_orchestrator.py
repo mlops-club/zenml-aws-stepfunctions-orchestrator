@@ -180,8 +180,11 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         """
         return StepFunctionsOrchestratorSettings
 
-    def _get_step_functions_client(self) -> boto3.client:
+    def _get_boto_client(self, service: str) -> boto3.client:
         """Method to create the Step Functions client with proper authentication.
+
+        Args:
+            service: The name of the AWS service to create a client for.
 
         Returns:
             The Step Functions client.
@@ -209,7 +212,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 region_name=self.config.region,
             )
 
-        return boto_session.client("stepfunctions")
+        return boto_session.client(service)
 
     def prepare_or_run_pipeline(
         self,
@@ -217,8 +220,8 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         stack: "Stack",
         environment: Dict[str, str],
     ) -> Iterator[Dict[str, MetadataType]]:
-        sfn = self._get_step_functions_client()
-        ecs = self._get_ecs_client()
+        sfn = self._get_boto_client("stepfunctions")
+        ecs = self._get_boto_client("ecs")
         state_machine_arn = None
 
         try:
@@ -230,15 +233,15 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             task_definitions = self._create_task_definitions(
                 deployment, environment, ecs
             )
-            state_machine_definition = self._build_state_machine_definition(
-                deployment, task_definitions
+            state_machine_arn = self._create_state_machine_definition(
+                deployment, sfn, task_definitions, state_machine_name
             )
 
-            state_machine_arn = self._deploy_state_machine(
-                sfn, state_machine_name, state_machine_definition
+            response = sfn.start_execution(
+                stateMachineArn=state_machine_arn,
+                name=execution_id,
             )
-            execution_arn = self._start_execution(sfn, state_machine_arn, execution_id)
-
+            execution_arn = response["executionArn"]
             yield from self._generate_execution_metadata(
                 execution_arn, task_definitions
             )
@@ -258,7 +261,30 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
     ) -> Dict[str, str]:
         task_defs = {}
         for step_name, step_config in deployment.step_configurations.items():
-            config_hash = self._hash_step_config(step_config, environment)
+            resource = step_config.config.resource_settings or ResourceSettings()
+            image = self.get_image(deployment, step_name)
+            command = StepEntrypointConfiguration.get_entrypoint_command()
+            arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
+                step_name=step_name,
+                deployment_id=deployment.id,
+            )
+            entrypoint = command + arguments
+            step_settings = cast(
+                StepFunctionsOrchestratorSettings, self.get_settings(step_config)
+            )
+            config_hash = hashlib.sha256(
+                json.dumps(
+                    {
+                        "image": image,
+                        "env": sorted(environment.items()),
+                        "command": entrypoint,
+                        "cpu": resource.cpu_count,
+                        "memory": resource.memory,
+                        "gpu": resource.gpu_count,
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
             family_name = f"zenml-{step_name}-{config_hash[:8]}"
 
             self._cleanup_old_task_definitions(ecs, family_name)
@@ -266,29 +292,39 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             try:
                 task_def_arn = self._get_existing_task_definition(ecs, family_name)
             except ClientError:
-                task_def_arn = self._register_task_definition(
-                    deployment, ecs, family_name, step_name, step_config, environment
+                self._validate_fargate_resources(resource)
+
+                response = ecs.register_task_definition(
+                    family=family_name,
+                    networkMode=step_settings.network_mode,
+                    requiresCompatibilities=step_settings.requires_compatibilities,
+                    cpu=str(resource.cpu_count),
+                    memory=str(resource.memory),
+                    executionRoleArn=self.config.execution_role,
+                    taskRoleArn=self.config.task_role,
+                    containerDefinitions=[
+                        {
+                            "name": "zenml-container",
+                            "image": image,
+                            "command": entrypoint,
+                            "environment": [
+                                {"name": k, "value": v} for k, v in environment.items()
+                            ],
+                            "logConfiguration": {
+                                "logDriver": "awslogs",
+                                "options": {
+                                    "awslogs-group": f"/ecs/{family_name}",
+                                    "awslogs-region": self.config.region,
+                                    "awslogs-stream-prefix": "zenml",
+                                },
+                            },
+                        }
+                    ],
                 )
+                task_def_arn = response["taskDefinition"]["taskDefinitionArn"]
+                task_defs[step_name] = task_def_arn
 
-            task_defs[step_name] = task_def_arn
         return task_defs
-
-    def _hash_step_config(self, step_config, environment: Dict[str, str]) -> str:
-        resource = step_config.config.resource_settings or ResourceSettings()
-        return hashlib.sha256(
-            json.dumps(
-                {
-                    "image": self.get_image(step_config).dict(),
-                    "env": sorted(environment.items()),
-                    "command": step_config.spec.command,
-                    "cpu": resource.cpu_count,
-                    "memory": resource.memory,
-                    "gpu": resource.gpu_count,
-                    "gpu_type": resource.gpu_type,
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
 
     def _cleanup_old_task_definitions(self, ecs: boto3.client, family_name: str):
         try:
@@ -300,53 +336,6 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         except ClientError as e:
             logger.warning(f"Failed to clean up task definitions: {e}")
 
-    def _register_task_definition(
-        self,
-        deployment: "PipelineDeploymentResponse",
-        ecs: boto3.client,
-        family_name: str,
-        step_name: str,
-        step_config: Step,
-        environment: Dict[str, str],
-    ) -> str:
-        resource = step_config.config.resource_settings
-        self._validate_fargate_resources(resource)
-        image = self.get_image(deployment, step_name)
-        command = StepEntrypointConfiguration.get_entrypoint_command()
-        arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
-            step_name=step_name,
-            deployment_id=deployment.id,
-        )
-        entrypoint = command + arguments
-        response = ecs.register_task_definition(
-            family=family_name,
-            networkMode="awsvpc",
-            requiresCompatibilities=["FARGATE"],
-            cpu=str(resource.cpu_count),
-            memory=str(resource.memory),
-            executionRoleArn=self.config.execution_role,
-            taskRoleArn=self.config.task_role,
-            containerDefinitions=[
-                {
-                    "name": "zenml-container",
-                    "image": image,
-                    "command": entrypoint,
-                    "environment": [
-                        {"name": k, "value": v} for k, v in environment.items()
-                    ],
-                    "logConfiguration": {
-                        "logDriver": "awslogs",
-                        "options": {
-                            "awslogs-group": f"/ecs/{family_name}",
-                            "awslogs-region": self.config.region,
-                            "awslogs-stream-prefix": "zenml",
-                        },
-                    },
-                }
-            ],
-        )
-        return response["taskDefinition"]["taskDefinitionArn"]
-
     def _validate_fargate_resources(self, settings: ResourceSettings):
         if settings.cpu_count not in VALID_FARGATE_CPU:
             raise ValueError(
@@ -357,10 +346,12 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
                 f"Memory {settings.memory}MB invalid for {settings.cpu_count} CPU units"
             )
 
-    def _build_state_machine_definition(
+    def _create_state_machine_definition(
         self,
         deployment: "PipelineDeploymentResponse",
+        sfn: boto3.client,
         task_definitions: Dict[str, str],
+        name: str,
     ) -> Dict[str, Any]:
         dag_levels = build_dag_levels(deployment)
         states = {"Start": {"Type": "Pass", "Next": "Level_0"}}
@@ -396,11 +387,19 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             }
         )
 
-        return {
+        definition = {
             "Comment": f"ZenML Pipeline: {deployment.pipeline_configuration.name}",
             "StartAt": "Start",
             "States": states,
         }
+        response = sfn.create_state_machine(
+            name=name,
+            definition=json.dumps(definition),
+            roleArn=self.config.execution_role,
+            type="STANDARD",
+            tags=[{"key": "zenml-pipeline", "value": name}],
+        )
+        return response["stateMachineArn"]
 
     def _create_step_state(self, task_definition_arn: str) -> Dict[str, Any]:
         return {
@@ -430,33 +429,6 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             ],
             "End": True,
         }
-
-    def _deploy_state_machine(
-        self,
-        sfn: boto3.client,
-        name: str,
-        definition: Dict[str, Any],
-    ) -> str:
-        response = sfn.create_state_machine(
-            name=name,
-            definition=json.dumps(definition),
-            roleArn=self.config.execution_role,
-            type="STANDARD",
-            tags=[{"key": "zenml-pipeline", "value": name}],
-        )
-        return response["stateMachineArn"]
-
-    def _start_execution(
-        self,
-        sfn: boto3.client,
-        state_machine_arn: str,
-        execution_id: str,
-    ) -> str:
-        response = sfn.start_execution(
-            stateMachineArn=state_machine_arn,
-            name=execution_id,
-        )
-        return response["executionArn"]
 
     def _generate_execution_metadata(
         self,
