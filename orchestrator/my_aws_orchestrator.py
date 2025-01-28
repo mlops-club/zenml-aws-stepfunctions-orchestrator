@@ -401,8 +401,8 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
             name=name,
             definition=json.dumps(definition),
             roleArn=self.config.execution_role,
-            type="STANDARD",
-            tags=[{"key": "zenml-pipeline", "value": name}],
+            type=settings.state_machine_type,
+            tags=[{"key": x, "value": y} for x, y in settings.tags.items()],
         )
         return response["stateMachineArn"]
 
