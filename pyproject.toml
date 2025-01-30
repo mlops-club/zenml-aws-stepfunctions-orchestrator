@@ -4,16 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "pulumi-aws",
-]
+dependencies = ["pulumi-aws"]
 
 [tool.uv.workspace]
 members = ["infra"]
-
-[tool.uv.sources]
-pulumi-aws = { path = "pulumi/sdks/aws" }
-
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]

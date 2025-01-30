@@ -642,21 +642,17 @@ wheels = [
 
 [[package]]
 name = "pulumi-aws"
-version = "5.84.0"
-source = { directory = "pulumi/sdks/aws" }
+version = "6.67.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parver" },
     { name = "pulumi" },
     { name = "semver" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "parver", specifier = ">=0.2.1" },
-    { name = "pulumi", specifier = ">=3.142.0,<4.0.0" },
-    { name = "semver", specifier = ">=2.8.1" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11" },
+sdist = { url = "https://files.pythonhosted.org/packages/9c/ee/fca33f87f4db0264f7b4e3986f330d6eb1c01ad24ec6532e4522e25fba24/pulumi_aws-6.67.0.tar.gz", hash = "sha256:f53b6a07dfe14430d46226d611317a24d21f79e97c5ef4dfa0ebc99b46a12025", size = 7366069 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/54/84fe24552e5bd46f6c925ff0952a011a6c1e8c45caf544b74937b2640b28/pulumi_aws-6.67.0-py3-none-any.whl", hash = "sha256:c5def0242b650510b68702d4cdacf0a7a34d1cf3c73c734006c74ec60fe9d86d", size = 10074146 },
 ]
 
 [[package]]
@@ -958,7 +954,7 @@ requires-dist = [
     { name = "flake8-pyproject", marker = "extra == 'static-code-qa'" },
     { name = "isort", marker = "extra == 'static-code-qa'" },
     { name = "pre-commit", marker = "extra == 'static-code-qa'" },
-    { name = "pulumi-aws", directory = "pulumi/sdks/aws" },
+    { name = "pulumi-aws" },
     { name = "pylint", marker = "extra == 'static-code-qa'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-cov", marker = "extra == 'test'" },
