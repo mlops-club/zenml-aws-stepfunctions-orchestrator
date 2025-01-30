@@ -1,0 +1,104 @@
+[project]
+name = "zenml-aws-stepfunctions-orchestrator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pulumi-aws",
+]
+
+[tool.uv.workspace]
+members = ["infra"]
+
+[tool.uv.sources]
+pulumi-aws = { path = "pulumi/sdks/aws" }
+
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov"]
+static-code-qa = [
+    "pre-commit",
+    "pylint",
+    "black",
+    "isort",
+    "flake8",
+    "flake8-docstrings",
+    "Flake8-pyproject",
+    "radon",
+]
+# Installing dev depenendencies in your virtual env makes it so that during development VS Code can
+# - surface linting errors
+# - automatically apply formatting
+# - show enhanced autocompletion for stubs libraries
+# See .vscode/settings.json to see how VS Code is configured to use these tools
+dev = ["zenml-aws-stepfunctions-orchestrator[test,static-code-qa,stubs]"]
+
+
+##############################
+# --- Code Quality Tools --- #
+##############################
+
+[tool.pytest.ini_options]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+
+[tool.black]
+line-length = 119
+# regular expression ignoring multiple patterns separated by '|' and newlines
+exclude = '''
+/(
+    \.venv
+  | venv
+)/
+'''
+
+[tool.flake8]
+docstring-convention = "all"
+ignore = [
+    "D107",
+    "D212",
+    "E501",
+    "W503",
+    "W605",
+    "D203",
+    "D100",
+    "R701",
+    "D401",
+    # D103: Missing docstring in public function
+    "D103",
+    # D101: Missing docstring in public class
+    "D101",
+    # D102: Missing docstring in public method
+    "D102",
+    # D104: Missing docstring in public package
+    "D104",
+    # D105: Missing docstring in magic method
+    "D105",
+]
+exclude = [".venv"]
+max-line-length = 119
+
+# radon
+radon-max-cc = 10
+
+[tool.isort]
+profile = "black"
+multi_line_output = "VERTICAL_HANGING_INDENT"
+force_grid_wrap = 2
+line_length = 119
+
+[tool.pylint."messages control"]
+disable = [
+    "line-too-long",
+    "trailing-whitespace",
+    "missing-function-docstring",
+    "consider-using-f-string",
+    "import-error",
+    "too-few-public-methods",
+    "redefined-outer-name",
+    "unused-argument",
+    "inconsistent-return-statements",
+    "unsupported-binary-operation",
+    "unsubscriptable-object",
+    "missing-module-docstring",
+]
