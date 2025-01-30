@@ -1,0 +1,15 @@
+[project]
+name = "infra"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "phitoduck", email = "eric.riddoch@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "pulumi>=3.147.0",
+    "pulumi-aws>=6.67.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
