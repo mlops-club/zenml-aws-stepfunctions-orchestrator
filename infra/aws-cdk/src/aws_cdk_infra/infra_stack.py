@@ -57,4 +57,12 @@ class ZenMLInfraStack(Stack):
             self,
             "ecr-repo-aws-console-url",
             value=f"https://console.aws.amazon.com/ecr/repositories/{ecr_repo.repository_name}?region={self.region}",
+            export_name="zenml-hackathon-ecr-repo-name",
         )
+        
+        cdk.CfnOutput(
+            self,
+            "ecr-repo-image-uri",
+            value=f"{ecr_repo.repository_uri}:latest",  # assuming the image tag is 'latest'
+            export_name="zenml-hackathon-ecr-repo-image-uri",
+)
