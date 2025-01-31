@@ -1,9 +1,8 @@
 import os
 
 import aws_cdk as cdk
-
-from infra.aws_batch_stack import AWSBatchStack
-from infra.infra_stack import ZenMLInfraStack
+from aws_cdk_infra.aws_batch_stack import AWSBatchStack
+from aws_cdk_infra.infra_stack import ZenMLInfraStack
 
 app = cdk.App()
 

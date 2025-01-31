@@ -98,21 +98,6 @@ wheels = [
 ]
 
 [[package]]
-name = "infra"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "pulumi" },
-    { name = "pulumi-aws" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pulumi", specifier = ">=3.147.0" },
-    { name = "pulumi-aws", specifier = ">=6.67.0" },
-]
-
-[[package]]
 name = "parver"
 version = "0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -179,6 +164,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9c/ee/fca33f87f4db0264f7b4e3986f330d6eb1c01ad24ec6532e4522e25fba24/pulumi_aws-6.67.0.tar.gz", hash = "sha256:f53b6a07dfe14430d46226d611317a24d21f79e97c5ef4dfa0ebc99b46a12025", size = 7366069 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/54/84fe24552e5bd46f6c925ff0952a011a6c1e8c45caf544b74937b2640b28/pulumi_aws-6.67.0-py3-none-any.whl", hash = "sha256:c5def0242b650510b68702d4cdacf0a7a34d1cf3c73c734006c74ec60fe9d86d", size = 10074146 },
+]
+
+[[package]]
+name = "pulumi-zenml"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "pulumi" },
+    { name = "pulumi-aws" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pulumi", specifier = ">=3.147.0" },
+    { name = "pulumi-aws", specifier = ">=6.67.0" },
 ]
 
 [[package]]

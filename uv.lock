@@ -8,7 +8,8 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "infra",
+    "aws-cdk-infra",
+    "pulumi-zenml",
     "zenml-aws-stepfunctions-orchestrator",
 ]
 
@@ -96,6 +97,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4c/a5/24a136e9d0a2d63efee0181a31d8878e3ce2a7428af416fa6d0d3ddb2347/aws_cdk_cloud_assembly_schema-38.0.1.tar.gz", hash = "sha256:7c75861adc41f7b959910d4b3b191ea242815402e599dbfa31934892838ae25e", size = 183649 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/11/1c/5c45607b94c0f756e6d05ff1fc3bb6705c51b5b1e1862905cba2af818c40/aws_cdk.cloud_assembly_schema-38.0.1-py3-none-any.whl", hash = "sha256:92613b46213b460681e9424f09b77f06ff059eb1c773092540364ef82fcecf55", size = 182242 },
+]
+
+[[package]]
+name = "aws-cdk-infra"
+version = "0.1.0"
+source = { editable = "infra/aws-cdk" }
+dependencies = [
+    { name = "aws-cdk-lib" },
+    { name = "constructs" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aws-cdk-lib", specifier = "==2.171.1" },
+    { name = "constructs", specifier = ">=10.0.0,<11.0.0" },
 ]
 
 [[package]]
@@ -436,21 +452,6 @@ wheels = [
 ]
 
 [[package]]
-name = "infra"
-version = "0.1.0"
-source = { editable = "infra" }
-dependencies = [
-    { name = "aws-cdk-lib" },
-    { name = "constructs" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aws-cdk-lib", specifier = "==2.171.1" },
-    { name = "constructs", specifier = ">=10.0.0,<11.0.0" },
-]
-
-[[package]]
 name = "iniconfig"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -653,6 +654,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9c/ee/fca33f87f4db0264f7b4e3986f330d6eb1c01ad24ec6532e4522e25fba24/pulumi_aws-6.67.0.tar.gz", hash = "sha256:f53b6a07dfe14430d46226d611317a24d21f79e97c5ef4dfa0ebc99b46a12025", size = 7366069 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/54/84fe24552e5bd46f6c925ff0952a011a6c1e8c45caf544b74937b2640b28/pulumi_aws-6.67.0-py3-none-any.whl", hash = "sha256:c5def0242b650510b68702d4cdacf0a7a34d1cf3c73c734006c74ec60fe9d86d", size = 10074146 },
+]
+
+[[package]]
+name = "pulumi-zenml"
+version = "0.1.0"
+source = { editable = "infra/pulumi" }
+dependencies = [
+    { name = "pulumi" },
+    { name = "pulumi-aws" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pulumi", specifier = ">=3.147.0" },
+    { name = "pulumi-aws", specifier = ">=6.67.0" },
 ]
 
 [[package]]
@@ -914,9 +930,6 @@ wheels = [
 name = "zenml-aws-stepfunctions-orchestrator"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
-    { name = "pulumi-aws" },
-]
 
 [package.optional-dependencies]
 dev = [
@@ -954,7 +967,6 @@ requires-dist = [
     { name = "flake8-pyproject", marker = "extra == 'static-code-qa'" },
     { name = "isort", marker = "extra == 'static-code-qa'" },
     { name = "pre-commit", marker = "extra == 'static-code-qa'" },
-    { name = "pulumi-aws" },
     { name = "pylint", marker = "extra == 'static-code-qa'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-cov", marker = "extra == 'test'" },

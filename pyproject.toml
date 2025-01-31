@@ -4,10 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["pulumi-aws"]
 
 [tool.uv.workspace]
-members = ["infra"]
+members = ["infra/aws-cdk", "infra/pulumi"]
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
@@ -68,6 +67,10 @@ ignore = [
     "D104",
     # D105: Missing docstring in magic method
     "D105",
+    # D400: First line should end with a period
+    "D400",
+    # D415: First line should end with a period, question mark, or exclamation point
+    "D415",
 ]
 exclude = [".venv"]
 max-line-length = 119

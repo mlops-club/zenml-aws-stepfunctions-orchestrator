@@ -1,7 +1,6 @@
 import aws_cdk as cdk
 from aws_cdk import Stack  # Duration,; aws_sqs as sqs,
 from aws_cdk import aws_ecr as ecr
-from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 

@@ -1,5 +1,11 @@
 # 🎼 Create a Custom Orchestrator with ZenML
 
+```bash
+# Install the all packages with their dependencies
+uv sync --all-packages
+```
+
+
 ZenML allows you to [create a custom orchestrator](https://docs.zenml.io/stack-components/orchestrators/custom), an essential component in any MLOps stack responsible for running your machine learning pipelines. This tutorial guides you through the process of creating an orchestrator that runs each step of a pipeline locally in a docker container.
 
 ## ❓Why would you need a custom orchestrator?

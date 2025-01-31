@@ -1,7 +1,7 @@
-I generated a Python SDK for Pulumi using 
+I generated a Python SDK for Pulumi using
 
 ```
 brew install pulumi uv
 
-pulumi package add terraform-provider registry.terraform.io/zenml-io/zenml 
+pulumi package add terraform-provider registry.terraform.io/zenml-io/zenml
 ```
