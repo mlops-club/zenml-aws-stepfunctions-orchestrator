@@ -47,7 +47,7 @@ class AWSBatchStack(Stack):
                 iam.ServicePrincipal("batch.amazonaws.com"),  # Allows Batch jobs to assume this role
             ),
             managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSBatchServiceRole"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSBatchServiceRole"), 
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"),
             ],
@@ -78,7 +78,30 @@ class AWSBatchStack(Stack):
             ],
             priority=1,
         )
+        
+        # Job Definition
+        jobDefinition = batch.JobDefinition(
+            self,
+            id="ZenMLECSBatchJobDefinition",
+            job_definition_name="zenml-hackathon-ecs-batch-job-definition",
+            platform_capabilities=[batch.PlatformCapabilities.EC2],
+            container=batch.JobDefinitionContainer(
+                image=ecs.ContainerImage.from_asset("docker"), # need to be replace with our docker image
+                vcpus=1,
+                # gpu_count=0, uncomment for ML
+                memory_limit_mib=2048,
+                execution_role=batch_job_role,
+            ),
+            retry_attempts=3,
+        )
+        
+        job_queue_arn = job_queue.job_queue_arn
+        job_definition_arn = jobDefinition.job_definition_arn
 
         # Outputs
         cdk.CfnOutput(self, "ecs-cluster-name", value=ecs_cluster.cluster_name)
         cdk.CfnOutput(self, "batch-job-queue-name", value=job_queue.job_queue_name)
+        cdk.CfnOutput(self, "batch-job-definition-name", value=jobDefinition.job_definition_name)
+        cdk.CfnOutput(self, "batch-job-queue-arn", value=job_queue_arn, export_name="zenml-hackathon-ecs-batch-job-queue-arn")
+        cdk.CfnOutput(self, "batch-job-definition-arn", value=job_definition_arn, export_name="zenml-hackathon-ecs-batch-job-definition-arn")
+

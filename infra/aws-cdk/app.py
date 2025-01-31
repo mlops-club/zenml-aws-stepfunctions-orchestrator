@@ -3,6 +3,7 @@ import os
 import aws_cdk as cdk
 from aws_cdk_infra.aws_batch_stack import AWSBatchStack
 from aws_cdk_infra.infra_stack import ZenMLInfraStack
+from aws_cdk_infra.aws_stepfunction_stack import AWSStepFunctionStack
 
 app = cdk.App()
 
@@ -23,5 +24,8 @@ infra_stack = ZenMLInfraStack(
 
 # AWS Batch Stack
 batch_stack = AWSBatchStack(app, "AWSBatchStack", env=aws_env)
+
+# AWS Step Function Stack 
+step_function_stack = AWSStepFunctionStack(app, "AWSStepFunctionStack", env=aws_env)
 
 app.synth()
