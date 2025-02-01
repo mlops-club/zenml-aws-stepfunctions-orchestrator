@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-AWS_PROFILE=pattern         # Using `Sandbox` account
+AWS_PROFILE=sbox
 AWS_DEFAULT_REGION=us-west-2
 
 

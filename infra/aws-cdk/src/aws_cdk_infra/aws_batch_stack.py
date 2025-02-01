@@ -16,7 +16,9 @@ class AWSBatchStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # Default VPC
-        vpc: ec2.IVpc = ec2.Vpc.from_lookup(scope=self, id="AwsBatchVpc", vpc_name="local-oregon")
+        vpc: ec2.IVpc = ec2.Vpc.from_lookup(
+            scope=self, id="AwsBatchVpc", vpc_name="local-oregon"
+        )
 
         # enable all outbound, and no inbound
         batch_security_group = ec2.SecurityGroup(
@@ -43,13 +45,23 @@ class AWSBatchStack(Stack):
             role_name="zenml-hackathon-batch-job-role",
             # https://gist.github.com/shortjared/4c1e3fe52bdfa47522cfe5b41e5d6f22
             assumed_by=iam.CompositePrincipal(
-                iam.ServicePrincipal("ecs-tasks.amazonaws.com"),  # Allows ECS tasks to assume this role
-                iam.ServicePrincipal("batch.amazonaws.com"),  # Allows Batch jobs to assume this role
+                iam.ServicePrincipal(
+                    "ecs-tasks.amazonaws.com"
+                ),  # Allows ECS tasks to assume this role
+                iam.ServicePrincipal(
+                    "batch.amazonaws.com"
+                ),  # Allows Batch jobs to assume this role
             ),
             managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSBatchServiceRole"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSBatchServiceRole"
+                ),
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonEC2ContainerRegistryReadOnly"
+                ),
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "CloudWatchLogsFullAccess"
+                ),
             ],
         )
 
@@ -74,7 +86,9 @@ class AWSBatchStack(Stack):
             id="ZenMLECSBatchJobQueue",
             job_queue_name="zenml-hackathon-ecs-batch-job-queue",
             compute_environments=[
-                batch.OrderedComputeEnvironment(order=1, compute_environment=compute_env),
+                batch.OrderedComputeEnvironment(
+                    order=1, compute_environment=compute_env
+                ),
             ],
             priority=1,
         )

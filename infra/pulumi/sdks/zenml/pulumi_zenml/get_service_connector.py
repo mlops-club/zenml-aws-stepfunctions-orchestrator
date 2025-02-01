@@ -175,7 +175,7 @@ def get_service_connector(id: Optional[str] = None,
 def get_service_connector_output(id: Optional[pulumi.Input[Optional[str]]] = None,
                                  name: Optional[pulumi.Input[Optional[str]]] = None,
                                  workspace: Optional[pulumi.Input[Optional[str]]] = None,
-                                 opts: Optional[pulumi.InvokeOptions] = None) -> pulumi.Output[GetServiceConnectorResult]:
+                                 opts: Optional[Union[pulumi.InvokeOptions, pulumi.InvokeOutputOptions]] = None) -> pulumi.Output[GetServiceConnectorResult]:
     """
     Use this data source to access information about an existing resource.
     """
@@ -183,7 +183,7 @@ def get_service_connector_output(id: Optional[pulumi.Input[Optional[str]]] = Non
     __args__['id'] = id
     __args__['name'] = name
     __args__['workspace'] = workspace
-    opts = pulumi.InvokeOptions.merge(_utilities.get_invoke_opts_defaults(), opts)
+    opts = pulumi.InvokeOutputOptions.merge(_utilities.get_invoke_opts_defaults(), opts)
     __ret__ = pulumi.runtime.invoke_output('zenml:index/getServiceConnector:getServiceConnector', __args__, opts=opts, typ=GetServiceConnectorResult, package_ref=_utilities.get_package())
     return __ret__.apply(lambda __response__: GetServiceConnectorResult(
         auth_method=pulumi.get(__response__, 'auth_method'),

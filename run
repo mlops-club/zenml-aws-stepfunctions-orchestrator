@@ -1,5 +1,11 @@
 #!/bin/bash
 
+#
+# Execute this script:
+#
+# `./run <task> <args>`
+#
+
 set -e
 
 #####################
@@ -8,15 +14,44 @@ set -e
 
 THIS_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
+export AWS_PROFILE="sbox"
+
 
 ##########################
 # --- Task Functions --- #
 ##########################
 
+function cdk-deploy() {
+    cd infra/aws-cdk
+	uv run -- cdk deploy \
+	    --all \
+		--app "python app.py" \
+		--profile "$AWS_PROFILE"
+}
+
+function generate-pulumi-zenml-sdk() {
+	rm -rf ${THIS_DIR}/infra/pulumi/sdks || true
+	pulumi package add terraform-provider registry.terraform.io/zenml-io/zenml
+}
+
+function pulumi-up() {
+	cd infra/pulumi
+	pulumi up
+}
+
+function pulumi-login-local() {
+	pulumi login --local
+}
+
+function pulumi-login-s3() {
+	echo "not implemented"
+}
+
 # install core and development Python dependencies into the currently activated venv
 function install {
-	uv pip install --upgrade pip
-    uv pip install --editable "$THIS_DIR/[dev]"
+	uv sync
+	INTEGRATION_REQUIREMENTS=$(uv run -- zenml stack export-requirements)
+	uv add ${INTEGRATION_REQUIREMENTS}
 }
 
 

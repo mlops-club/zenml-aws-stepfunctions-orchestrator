@@ -129,13 +129,13 @@ def get_server(id: Optional[str] = None,
         server_url=pulumi.get(__ret__, 'server_url'),
         version=pulumi.get(__ret__, 'version'))
 def get_server_output(id: Optional[pulumi.Input[Optional[str]]] = None,
-                      opts: Optional[pulumi.InvokeOptions] = None) -> pulumi.Output[GetServerResult]:
+                      opts: Optional[Union[pulumi.InvokeOptions, pulumi.InvokeOutputOptions]] = None) -> pulumi.Output[GetServerResult]:
     """
     Use this data source to access information about an existing resource.
     """
     __args__ = dict()
     __args__['id'] = id
-    opts = pulumi.InvokeOptions.merge(_utilities.get_invoke_opts_defaults(), opts)
+    opts = pulumi.InvokeOutputOptions.merge(_utilities.get_invoke_opts_defaults(), opts)
     __ret__ = pulumi.runtime.invoke_output('zenml:index/getServer:getServer', __args__, opts=opts, typ=GetServerResult, package_ref=_utilities.get_package())
     return __ret__.apply(lambda __response__: GetServerResult(
         auth_scheme=pulumi.get(__response__, 'auth_scheme'),

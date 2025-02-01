@@ -126,7 +126,7 @@ def get_stack(id: Optional[str] = None,
 def get_stack_output(id: Optional[pulumi.Input[Optional[str]]] = None,
                      name: Optional[pulumi.Input[Optional[str]]] = None,
                      workspace: Optional[pulumi.Input[Optional[str]]] = None,
-                     opts: Optional[pulumi.InvokeOptions] = None) -> pulumi.Output[GetStackResult]:
+                     opts: Optional[Union[pulumi.InvokeOptions, pulumi.InvokeOutputOptions]] = None) -> pulumi.Output[GetStackResult]:
     """
     Use this data source to access information about an existing resource.
     """
@@ -134,7 +134,7 @@ def get_stack_output(id: Optional[pulumi.Input[Optional[str]]] = None,
     __args__['id'] = id
     __args__['name'] = name
     __args__['workspace'] = workspace
-    opts = pulumi.InvokeOptions.merge(_utilities.get_invoke_opts_defaults(), opts)
+    opts = pulumi.InvokeOutputOptions.merge(_utilities.get_invoke_opts_defaults(), opts)
     __ret__ = pulumi.runtime.invoke_output('zenml:index/getStack:getStack', __args__, opts=opts, typ=GetStackResult, package_ref=_utilities.get_package())
     return __ret__.apply(lambda __response__: GetStackResult(
         components=pulumi.get(__response__, 'components'),

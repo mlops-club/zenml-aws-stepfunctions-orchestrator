@@ -168,17 +168,38 @@ wheels = [
 
 [[package]]
 name = "pulumi-zenml"
+version = "1.1.3"
+source = { directory = "sdks/zenml" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "parver", specifier = ">=0.2.1" },
+    { name = "pulumi", specifier = ">=3.142.0,<4.0.0" },
+    { name = "semver", specifier = ">=2.8.1" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11" },
+]
+
+[[package]]
+name = "pulumi-zenml-infra"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pulumi" },
     { name = "pulumi-aws" },
+    { name = "pulumi-zenml" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "pulumi", specifier = ">=3.147.0" },
-    { name = "pulumi-aws", specifier = ">=6.67.0" },
+    { name = "pulumi", specifier = ">=3.0.0,<4.0.0" },
+    { name = "pulumi-aws", specifier = ">=6.0.2,<7.0.0" },
+    { name = "pulumi-zenml", directory = "sdks/zenml" },
 ]
 
 [[package]]
