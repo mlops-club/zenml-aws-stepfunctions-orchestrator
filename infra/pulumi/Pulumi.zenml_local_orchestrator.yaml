@@ -1,0 +1,7 @@
+encryptionsalt: v1:kPmSQGNTjLk=:v1:SYLiKrJxKHxfkxtz:jt0VTvInTDmJOknpIJyw3k6FJh90Xg==
+config:
+  aws:profile: sbox
+  zenml:serverUrl: https://96678f4f-zenml.cloudinfra.zenml.io
+  zenml:apiKey:
+    secure: v1:JPZ/opkfSsublEQG:wuiNDy4zlkQAr3RkuKaL0HcrCQxZgiPrBiXSa3Pv0xEMN5w4NY7KHh4MDcrNV/cxcAY7b4749RnQ7btYYL+9wwc0STqdM/2Syna4YRd37vCHhvIERZ2fXFY6FQg8a6JrRQauri6RoVO8VeRR81zHcckwX/ZO3WjAnlUdkeSGBcq4BmN9ilAOEjrmBqIFzVzUOgojrhobLUU1v7dZ+Rjf0uSXv6hColJR4Cc3ig+ySKc=
+  aws:region: us-west-2
