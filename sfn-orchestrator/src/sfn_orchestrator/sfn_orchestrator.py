@@ -297,7 +297,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         sfn = boto3.client("stepfunctions", region_name="us-west-2")
         name = "ZenML_Batch_Job_StateMachine_DAG_Script"
-        state_machine_definition = self._create_state_machine_definition(
+        state_machine_definition = _create_state_machine_definition(
             deployment, sfn, name=name
         )
         print(state_machine_definition)

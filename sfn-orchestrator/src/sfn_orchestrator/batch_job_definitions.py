@@ -66,6 +66,18 @@ class BatchJobDefinitionConfig:
             resource.get_memory(unit=ByteUnit.MB),
             resource.gpu_count,
         )
+        
+        # Convert CPU units to vCPU format
+        vcpu_mapping = {
+            256: "0.25",
+            512: "0.5",
+            1024: "1",
+            2048: "2",
+            4096: "4",
+            8192: "8",
+            16384: "16"
+        }
+        vcpu_value = vcpu_mapping.get(resource.cpu_count, f"{resource.cpu_count} CPU")
 
         # Get step command
         command = StepEntrypointConfiguration.get_entrypoint_command()
@@ -79,8 +91,8 @@ class BatchJobDefinitionConfig:
             image=get_image_fn(deployment, step_name),
             environment=sorted(environment.items()),
             command=command + arguments,
-            cpu=resource.cpu_count,
-            memory=resource.get_memory(unit=ByteUnit.MB),
+            cpu=vcpu_value, # resource.cpu_count,
+            memory=int(resource.get_memory(unit=ByteUnit.MB)),
             gpu=resource.gpu_count,
         )
 
@@ -271,6 +283,7 @@ def _generate_job_definition_config(
     command: Optional[List[str]] = None,
     task_role_arn: Optional[str] = None,
     gpu: int = 0,
+    *args, **kwargs
 ) -> Dict[str, Any]:
     """Generate AWS Batch job definition configuration.
 
