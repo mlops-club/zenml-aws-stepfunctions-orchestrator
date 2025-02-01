@@ -1,4 +1,5 @@
 from zenml import pipeline, step
+from zenml.config.resource_settings import ResourceSettings
 from zenml.steps.entrypoint_function_utils import StepArtifact
 
 
@@ -20,7 +21,14 @@ def add_three(num: int) -> int:
     return num + 3
 
 
-@step
+@step(
+    settings={
+        "resources": ResourceSettings(
+            cpu_count=512,
+            memory="1024MB",
+        ),
+    }
+)
 def add_artifacts(num1: int, num2: int) -> int:
     result = num1 + num2
     print(f"Result: {result}")
