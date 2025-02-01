@@ -2331,6 +2331,21 @@ wheels = [
 ]
 
 [[package]]
+name = "sfn-orchestrator"
+version = "0.1.0"
+source = { editable = "../sfn-orchestrator" }
+dependencies = [
+    { name = "boto3" },
+    { name = "zenml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3" },
+    { name = "zenml", specifier = ">=0.73.0" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2816,6 +2831,7 @@ dependencies = [
     { name = "pulumi-aws" },
     { name = "s3fs" },
     { name = "sagemaker" },
+    { name = "sfn-orchestrator" },
     { name = "zenml" },
 ]
 
@@ -2866,6 +2882,7 @@ requires-dist = [
     { name = "radon", marker = "extra == 'static-code-qa'" },
     { name = "s3fs", specifier = ">2022.3.0" },
     { name = "sagemaker", specifier = ">=2.117.0" },
+    { name = "sfn-orchestrator", editable = "../sfn-orchestrator" },
     { name = "zenml", specifier = ">=0.73.0" },
     { name = "zenml-aws-stepfunctions-orchestrator", extras = ["test", "static-code-qa", "stubs"], marker = "extra == 'dev'" },
 ]

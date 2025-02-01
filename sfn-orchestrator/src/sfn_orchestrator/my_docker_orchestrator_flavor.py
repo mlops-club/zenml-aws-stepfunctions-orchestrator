@@ -1,6 +1,7 @@
 """Implementation of a custom local Docker orchestrator flavor."""
 
-from typing import Optional, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Type
+
 from zenml.logger import get_logger
 from zenml.orchestrators import (
     BaseOrchestratorConfig,
@@ -10,7 +11,7 @@ from zenml.orchestrators import (
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from orchestrator.my_docker_orchestrator import LocalDockerOrchestrator
+    from sfn_orchestrator.my_docker_orchestrator import LocalDockerOrchestrator
 
 
 class LocalDockerOrchestratorFlavor(BaseOrchestratorFlavor):
@@ -59,7 +60,9 @@ class LocalDockerOrchestratorFlavor(BaseOrchestratorFlavor):
         Returns:
             The config class.
         """
-        from orchestrator.my_docker_orchestrator import LocalDockerOrchestratorConfig
+        from sfn_orchestrator.my_docker_orchestrator import (
+            LocalDockerOrchestratorConfig,
+        )
 
         return LocalDockerOrchestratorConfig
 
@@ -70,6 +73,6 @@ class LocalDockerOrchestratorFlavor(BaseOrchestratorFlavor):
         Returns:
             Implementation class for this flavor.
         """
-        from orchestrator.my_docker_orchestrator import LocalDockerOrchestrator
+        from sfn_orchestrator.my_docker_orchestrator import LocalDockerOrchestrator
 
         return LocalDockerOrchestrator

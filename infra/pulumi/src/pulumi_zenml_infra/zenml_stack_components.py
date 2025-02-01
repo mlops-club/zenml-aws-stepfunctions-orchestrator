@@ -7,7 +7,6 @@ def create_artifact_store(
     stack_name: str,
     bucket_name: str,
     connector_id: str,
-    deployment: str,
 ) -> zenml.StackComponent:
     return zenml.StackComponent(
         "artifact-store",
@@ -24,7 +23,6 @@ def create_container_registry(
     repository_url: str,
     repository_name: str,
     connector_id: str,
-    deployment: str,
 ) -> zenml.StackComponent:
     return zenml.StackComponent(
         "container-registry",
@@ -39,13 +37,22 @@ def create_container_registry(
     )
 
 
-def create_local_docker_orchestrator(
-    stack_name: str,
-    deployment: str,
-) -> zenml.StackComponent:
+def create_local_docker_orchestrator() -> zenml.StackComponent:
     return zenml.StackComponent(
-        "orchestrator",
-        name=f"{stack_name}-local-docker-orchestrator",
+        "local-docker-orchestrator",
+        name="local-docker",
         type="orchestrator",
         flavor="local_docker",
+    )
+
+
+def create_aws_step_functions_orchestrator() -> zenml.StackComponent:
+    return zenml.StackComponent(
+        "step-functions-orchestrator",
+        name="step-functions",
+        type="orchestrator",
+        flavor="aws_step_functions",
+        configuration={
+            "name": "Amit",
+        },
     )

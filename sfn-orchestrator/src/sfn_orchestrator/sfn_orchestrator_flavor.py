@@ -2,15 +2,15 @@
 
 from typing import TYPE_CHECKING, Dict, List, Optional, Type
 
+# from zenml.config.base_config import BaseConfig
 from zenml.config.base_settings import BaseSettings
-from zenml.config.base_config import BaseConfig
 from zenml.integrations.aws import AWS_RESOURCE_TYPE
 from zenml.models import ServiceConnectorRequirements
 from zenml.orchestrators import BaseOrchestratorConfig
 from zenml.orchestrators.base_orchestrator import BaseOrchestratorFlavor
 
 if TYPE_CHECKING:
-    from orchestrator.my_aws_orchestrator import StepFunctionsOrchestrator
+    from sfn_orchestrator.sfn_orchestrator import StepFunctionsOrchestrator
 
 DEFAULT_STATE_MACHINE_TYPE = "STANDARD"
 AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR = "aws_step_functions"
@@ -31,15 +31,7 @@ class StepFunctionsOrchestratorSettings(BaseSettings):
         backoff_rate: Backoff rate
     """
 
-    state_machine_type: str = "STANDARD"
-    network_mode: str = "awsvpc"
-    requires_compatibilities: List[str] = ["FARGATE"]
-    tags: Dict[str, str] = {}
-    synchronous: bool = True
-    assign_public_ip: bool = True
-    retry_interval_seconds: int = 30
-    max_attempts: int = 3
-    backoff_rate: float = 2.0
+    ...
 
 
 class StepFunctionsOrchestratorConfig(
@@ -48,20 +40,10 @@ class StepFunctionsOrchestratorConfig(
     """Configuration for the AWS Step Functions Orchestrator.
 
     Attributes:
-        ecs_cluster_arn: ARN of ECS cluster
-        execution_role: ARN of execution role
-        task_role: ARN of task role
-        subnet_ids: List of subnet IDs
-        security_group_ids: List of security group IDs
-        region: AWS region
+        name: Name of the orchestrator
     """
 
-    ecs_cluster_arn: str
-    execution_role: str
-    task_role: str
-    subnet_ids: List[str]
-    security_group_ids: List[str]
-    region: str
+    name: str
 
     @property
     def is_remote(self) -> bool:
@@ -148,6 +130,6 @@ class StepFunctionsOrchestratorFlavor(BaseOrchestratorFlavor):
         Returns:
             The implementation class.
         """
-        from orchestrator.my_aws_orchestrator import StepFunctionsOrchestrator
+        from sfn_orchestrator.sfn_orchestrator import StepFunctionsOrchestrator
 
         return StepFunctionsOrchestrator

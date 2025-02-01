@@ -25,6 +25,14 @@ bash ./run install
 # cdk infra
 bash ./run cdk-deploy
 
+# register the orchestrator
+cd orchestrator
+uv sync
+uvx zenml init
+uv run zenml orchestrator flavor register sfn_orchestrator.sfn_orchestrator_flavor.StepFunctionsOrchestratorFlavor
+# uv zenml orchestrator register aws_step_functions --flavor aws_step_functions
+cd ..
+
 # pulumi infra
 pulumi config set aws:profile sbox
 pulumi config set aws:profile us-west-2
