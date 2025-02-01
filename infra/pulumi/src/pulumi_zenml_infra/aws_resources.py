@@ -120,8 +120,6 @@ def create_zenml_iam_resources(artifact_store_bucket_name: str, ecr_repo_name: s
         ),
     )
 
-    # The user policy is no longer needed since we're using the trust relationship instead
-    # But we'll keep the access key creation
     access_key = aws.iam.AccessKey(
         "zenml-local-orchestrator-stack-service-key", user=user.name
     )
