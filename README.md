@@ -41,6 +41,9 @@ pulumi config set zenml:serverUrl https://<tenant>.cloudinfra.zenml.io
 bash ./run pulumi-login-local
 bash ./run pulumi-up
 
+# Set the stack
+uv run -- zenml stack set sfn-s3-ecr
+
 # run the pipeline 🎉
 uv run simple_pipeline.py
 ```

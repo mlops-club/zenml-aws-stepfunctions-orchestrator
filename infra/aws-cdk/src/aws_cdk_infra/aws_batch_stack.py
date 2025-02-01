@@ -29,13 +29,21 @@ class AWSBatchStack(Stack):
             description="Security Group for AWS Batch Compute Environment",
             allow_all_outbound=True,  # Allow all outbound traffic
         )
-
-        # Create an ECS cluster for the Batch Compute Environment
-        ecs_cluster: ecs.Cluster = ecs.Cluster(
+        
+        # # @TODO: Create a role that our state machine can assume to run the batch job
+        # @TODO: Tighten up the permissions on this role
+        step_functions_role = iam.Role(
             self,
-            id="ZenMLBatchECSCluster",
-            cluster_name="zenml-hackathon-batch-ecs-cluster",
-            vpc=vpc,
+            "StepFunctionsExecutionRole",
+            role_name="zenml-hackathon-step-functions-role",
+            assumed_by=iam.ServicePrincipal("states.amazonaws.com"),  # Allows Step Functions to assume this role
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("AWSStepFunctionsFullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AWSBatchFullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEventBridgeFullAccess"),
+            ],
         )
 
         # IAM Role for AWS Batch Jobs
@@ -51,17 +59,19 @@ class AWSBatchStack(Stack):
                 iam.ServicePrincipal(
                     "batch.amazonaws.com"
                 ),  # Allows Batch jobs to assume this role
+                iam.ServicePrincipal("ec2.amazonaws.com"),
             ),
             managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "service-role/AWSBatchServiceRole"
-                ),
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "AmazonEC2ContainerRegistryReadOnly"
-                ),
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "CloudWatchLogsFullAccess"
-                ),
+                # iam.ManagedPolicy.from_aws_managed_policy_name(
+                #     "service-role/AWSBatchServiceRole"
+                # ),
+                # iam.ManagedPolicy.from_aws_managed_policy_name(
+                #     "AmazonEC2ContainerRegistryReadOnly"
+                # ),
+                # iam.ManagedPolicy.from_aws_managed_policy_name(
+                #     "CloudWatchLogsFullAccess"
+                # )
+                iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess")
             ],
         )
 
@@ -77,6 +87,7 @@ class AWSBatchStack(Stack):
             maxv_cpus=2,
             vpc=vpc,
             security_groups=[batch_security_group],
+            enabled=True,
             service_role=batch_job_role,
         )
 
@@ -94,5 +105,76 @@ class AWSBatchStack(Stack):
         )
 
         # Outputs
-        cdk.CfnOutput(self, "ecs-cluster-name", value=ecs_cluster.cluster_name)
+        # cdk.CfnOutput(self, "ecs-cluster-name", value=ecs_cluster.cluster_name)
         cdk.CfnOutput(self, "batch-job-queue-name", value=job_queue.job_queue_name)
+
+
+
+# # ✅ **Step Functions IAM Role**
+#         step_functions_role = iam.Role(
+#             self,
+#             "StepFunctionsExecutionRole",
+#             role_name="zenml-hackathon-step-functions-role",
+#             assumed_by=iam.ServicePrincipal("states.amazonaws.com"),  # Allows Step Functions to assume this role
+#             managed_policies=[
+#                 iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess")
+#             ],
+#         )
+
+#         # ✅ **Attach Batch Permissions to Step Functions Role**
+#         step_functions_role.add_to_policy(
+#             iam.PolicyStatement(
+#                 effect=iam.Effect.ALLOW,
+#                 actions=[
+#                     "batch:SubmitJob",
+#                     "batch:DescribeJobs",
+#                     "batch:TerminateJob",
+#                 ],
+#                 resources=["*"],  # Can be scoped to specific Batch resources
+#             )
+#         )
+
+#         # ✅ **Attach EventBridge Permissions to Step Functions Role**
+#         step_functions_role.add_to_policy(
+#             iam.PolicyStatement(
+#                 effect=iam.Effect.ALLOW,
+#                 actions=[
+#                     "events:PutTargets",
+#                     "events:PutRule",
+#                     "events:DescribeRule",
+#                 ],
+#                 resources=["*"],  # Can be scoped to EventBridge rules
+#             )
+#         )
+
+#         # ✅ **Attach CloudWatch Logs Permissions to Step Functions Role**
+#         step_functions_role.add_to_policy(
+#             iam.PolicyStatement(
+#                 effect=iam.Effect.ALLOW,
+#                 actions=[
+#                     "cloudwatch:CreateLogDelivery",
+#                     "cloudwatch:GetLogDelivery",
+#                     "cloudwatch:UpdateLogDelivery",
+#                     "cloudwatch:DeleteLogDelivery",
+#                     "cloudwatch:ListLogDeliveries",
+#                     "cloudwatch:PutResourcePolicy",
+#                     "cloudwatch:DescribeResourcePolicies",
+#                     "cloudwatch:DescribeLogGroups",
+#                 ],
+#                 resources=["*"],  # Can be scoped to specific log groups
+#             )
+#         )
+
+#         # ✅ **Attach X-Ray Tracing Permissions to Step Functions Role**
+#         step_functions_role.add_to_policy(
+#             iam.PolicyStatement(
+#                 effect=iam.Effect.ALLOW,
+#                 actions=[
+#                     "xray:PutTraceSegments",
+#                     "xray:PutTelemetryRecords",
+#                     "xray:GetSamplingRules",
+#                     "xray:GetSamplingTargets",
+#                 ],
+#                 resources=["*"],  # Can be scoped to specific X-Ray traces
+#             )
+#         )
